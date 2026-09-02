@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>测试黑色节点问题</title>
+  <style>
+    /* 模拟 simple-mind-map 的节点样式 */
+    .smm-node-shape {
+      fill: #ffffff;
+      stroke: #333333;
+      stroke-width: 2;
+    }
+
+    .smm-text-node-wrap {
+      fill: #000000;
+    }
+
+    /* 掌握度颜色样式 */
+    .smm-node-mastery-color {
+      .smm-node-shape {
+        fill: var(--smm-mastery-fill) !important;
+      }
+
+      .smm-text-node-wrap {
+        fill: var(--smm-mastery-text) !important;
+      }
+    }
+
+    #testNode {
+      width: 200px;
+      height: 60px;
+    }
+  </style>
+</head>
+<body>
+  <h1>测试黑色节点问题</h1>
+
+  <div id="testNode" class="smm-node-shape smm-text-node-wrap">
+    测试节点
+  </div>
+
+  <button onclick="applyMasteryColor()">应用掌握度颜色</button>
+  <button onclick="removeMasteryColor()">移除掌握度颜色</button>
+
+  <script>
+    // 模拟掌握度颜色
+    const masteryColor = {
+      fillColor: '#ffeb3b',
+      textColor: '#000000'
+    };
+
+    function applyMasteryColor() {
+      const node = document.getElementById('testNode');
+      node.classList.add('smm-node-mastery-color');
+      node.style.setProperty('--smm-mastery-fill', masteryColor.fillColor);
+      node.style.setProperty('--smm-mastery-text', masteryColor.textColor);
+      console.log('应用掌握度颜色');
+    }
+
+    function removeMasteryColor() {
+      const node = document.getElementById('testNode');
+      node.classList.remove('smm-node-mastery-color');
+      node.style.removeProperty('--smm-mastery-fill');
+      node.style.removeProperty('--smm-mastery-text');
+      console.log('移除掌握度颜色');
+    }
+
+    // 测试不同场景
+    function testScenarios() {
+      console.log('=== 测试场景 ===');
+
+      // 场景1: 初始状态
+      console.log('1. 初始状态:', getComputedStyle(document.getElementById('testNode')).fill);
+
+      // 场景2: 应用掌握度颜色
+      applyMasteryColor();
+      console.log('2. 应用掌握度颜色后:', getComputedStyle(document.getElementById('testNode')).fill);
+
+      // 场景3: 移除掌握度颜色
+      removeMasteryColor();
+      console.log('3. 移除掌握度颜色后:', getComputedStyle(document.getElementById('testNode')).fill);
+
+      // 场景4: 只移除样式，不移除类
+      document.getElementById('testNode').classList.add('smm-node-mastery-color');
+      console.log('4. 只添加类，不设置样式:', getComputedStyle(document.getElementById('testNode')).fill);
+    }
+
+    // 页面加载后测试
+    window.onload = testScenarios;
+  </script>
+</body>
+</html>

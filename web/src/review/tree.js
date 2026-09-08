@@ -8,6 +8,31 @@ export const getReviewFileName = node => {
   return node && node.fileName ? node.fileName : '未归属'
 }
 
+// 目录模式身份归一（修复同科目裂成多组 + 定位失效）：
+// 复习记录写死“加入那一刻”的 fileId。同一张科目图会因存储体系切换被记成多种身份——
+// 浏览器旧代次 file_xxx / file_default 与目录模式规范 <科目>.smm —— 于是复习列表出现
+// 多个“化学/语文”，且旧 fileId 在工作目录中找不到对应文件导致定位失败。
+// 本函数不改存储，只在展示层把记录派生为目录模式规范身份（fileId=<科目>.smm），
+// 使同科目记录归并到同一组、并可被 openMapFile 命中现役科目图。
+export const toDirectorySubjectNode = node => {
+  if (!node || typeof node !== 'object') return node
+  const fid = node.fileId || ''
+  const name = String(node.fileName || '').trim()
+  // fileId 已是目录规范（<科目>.smm）或无科目名（未归属/空）→ 保持原样
+  if (fid.toLowerCase().endsWith('.smm')) return node
+  if (!name || name === '未归属') return node
+  // 浏览器旧代次 fileId 且带科目名 → 归一到 <科目>.smm（fileName 去扩展名）
+  const canonical = name.toLowerCase().endsWith('.smm') ? name : name + '.smm'
+  if (canonical === fid) return node
+  return { ...node, fileId: canonical, fileName: name.replace(/\.smm$/i, '') }
+}
+
+// 归一列表：目录模式下把每条复习记录派生为目录规范身份，供分组/筛选/定位使用。
+export const toDirectorySubjectList = (list, isDirectoryMode = false) => {
+  if (!isDirectoryMode) return list || []
+  return (list || []).map(n => toDirectorySubjectNode(n))
+}
+
 // 从持久化导图数据建立 childUid -> parentUid 映射。
 export const buildParentMap = data => {
   const result = {}

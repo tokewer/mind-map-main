@@ -11,7 +11,8 @@
       <el-button size="mini" type="danger" plain @click="onClearAll">清空历史</el-button>
     </div>
     <div class="historyList">
-      <div v-if="list.length === 0" class="empty">暂无历史版本</div>
+      <div v-if="loading" class="empty">加载中…</div>
+      <div v-else-if="list.length === 0" class="empty">暂无历史版本</div>
       <div
         class="historyItem"
         v-for="(item, index) in list"
@@ -34,7 +35,7 @@
             size="mini"
             type="text"
             class="dangerText"
-            @click="onDeleteOne(index)"
+            @click="onDeleteOne(item)"
           >删除</el-button>
         </div>
       </div>
@@ -51,7 +52,12 @@ import {
   deleteSnapshot,
   flushStore,
   restoreSnapshot,
-  getCurrentFileId
+  getCurrentFileId,
+  getDirectorySnapshots,
+  saveDirectorySnapshot,
+  clearDirectorySnapshots,
+  deleteDirectorySnapshot,
+  restoreDirectorySnapshot
 } from '@/api'
 
 const pad = n => String(n).padStart(2, '0')
@@ -61,12 +67,14 @@ export default {
   data() {
     return {
       visible: false,
-      list: []
+      list: [],
+      loading: false
     }
   },
   computed: {
     ...mapState({
-      isDark: state => state.localConfig.isDark
+      isDark: state => state.localConfig.isDark,
+      isDirectoryMode: state => state.isDirectoryMode
     })
   },
   created() {
@@ -80,7 +88,17 @@ export default {
       this.refresh()
       this.visible = true
     },
-    refresh() {
+    async refresh() {
+      if (this.isDirectoryMode) {
+        this.loading = true
+        try {
+          const list = await getDirectorySnapshots()
+          this.list = (list || []).slice().reverse() // 显示倒序：最新在前
+        } finally {
+          this.loading = false
+        }
+        return
+      }
       this.list = getSnapshots().slice().reverse() // 显示倒序：最新在前
     },
     formatTime(t) {
@@ -89,15 +107,19 @@ export default {
         d.getHours()
       )}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
     },
-    onSaveNow() {
-      // 先把节流中的最新编辑落盘，快照才能包含刚改的内容
-      if (this.$store.state.isHandleLocalFile) {
-        this.$bus.$emit('flush_local_file')
+    async onSaveNow() {
+      if (this.isDirectoryMode) {
+        await saveDirectorySnapshot(true)
       } else {
-        flushStore()
+        // 先把节流中的最新编辑落盘，快照才能包含刚改的内容
+        if (this.$store.state.isHandleLocalFile) {
+          this.$bus.$emit('flush_local_file')
+        } else {
+          flushStore()
+        }
+        saveSnapshot(getCurrentFileId(), true)
       }
-      saveSnapshot(getCurrentFileId(), true)
-      this.refresh()
+      await this.refresh()
       this.$message.success('已保存当前版本')
     },
     onRestore(item) {
@@ -106,24 +128,40 @@ export default {
         cancelButtonText: '取消',
         type: 'warning'
       })
-        .then(() => {
-          const data = restoreSnapshot(getCurrentFileId(), item)
-          this.$bus.$emit('setData', data)
+        .then(async () => {
+          if (this.isDirectoryMode) {
+            const res = await restoreDirectorySnapshot(item.name)
+            if (!res || !res.ok) {
+              this.$message.error((res && res.message) || '恢复失败')
+              return
+            }
+            this.$bus.$emit('setData', res.data)
+          } else {
+            const data = restoreSnapshot(getCurrentFileId(), item)
+            this.$bus.$emit('setData', data)
+          }
           this.visible = false
           this.$message.success('已恢复到该版本')
         })
         .catch(() => {})
     },
-    // 列表是倒序（最新在前），删除时换算回升序下标
-    onDeleteOne(index) {
-      const id = getCurrentFileId()
-      const ascIndex = this.list.length - 1 - index
-      deleteSnapshot(id, ascIndex)
-      this.refresh()
+    async onDeleteOne(item) {
+      if (this.isDirectoryMode) {
+        await deleteDirectorySnapshot(item.name)
+      } else {
+        // 列表是倒序（最新在前），删除时换算回升序下标
+        const ascIndex = this.list.length - 1 - this.list.findIndex(x => x === item)
+        deleteSnapshot(getCurrentFileId(), ascIndex)
+      }
+      await this.refresh()
     },
-    onClearAll() {
-      clearSnapshots()
-      this.refresh()
+    async onClearAll() {
+      if (this.isDirectoryMode) {
+        await clearDirectorySnapshots()
+      } else {
+        clearSnapshots()
+      }
+      await this.refresh()
       this.$message.success('历史已清空')
     }
   }

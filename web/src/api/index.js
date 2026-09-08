@@ -15,6 +15,16 @@ const SIMPLE_MIND_MAP_FILE_LIST = 'SIMPLE_MIND_MAP_FILE_LIST'
 const SIMPLE_MIND_MAP_CURRENT_FILE = 'SIMPLE_MIND_MAP_CURRENT_FILE'
 const SIMPLE_MIND_MAP_FILE_PREFIX = 'SIMPLE_MIND_MAP_FILE_'
 const SIMPLE_MIND_MAP_HISTORY_PREFIX = 'SIMPLE_MIND_MAP_HISTORY_'
+// 浏览器导图已「归档清理」标记：置 1 后，即使文件列表为空也不再自动重建默认导图
+const SIMPLE_MIND_MAP_BROWSER_CLEARED = 'SIMPLE_MIND_MAP_BROWSER_CLEARED'
+
+const isBrowserCleared = () => {
+  try {
+    return localStorage.getItem(SIMPLE_MIND_MAP_BROWSER_CLEARED) === '1'
+  } catch (e) {
+    return false
+  }
+}
 
 const HISTORY_MAX_AUTO = 10 // 自动快照保留份数
 const HISTORY_MAX_TOTAL = 30 // 快照总数上限（手动 + 自动）
@@ -45,7 +55,9 @@ export const initFileStorage = () => {
   } catch (e) {
     list = []
   }
-  if (list.length === 0) {
+  // 用户已执行「归档并清理浏览器存储」：文件列表为空时不再自动重建占位导图，
+  // 避免刚清理完又出现内容的“删不干净”观感。
+  if (list.length === 0 && !isBrowserCleared()) {
     let firstData = simpleDeepClone(exampleData)
     let oldData = localStorage.getItem(SIMPLE_MIND_MAP_DATA)
     if (oldData) {
@@ -96,7 +108,14 @@ export const getCurrentFileId = () => {
   let id = localStorage.getItem(SIMPLE_MIND_MAP_CURRENT_FILE)
   if (!id || !getFileList().find(f => f.id === id)) {
     const list = getFileList()
-    id = list.length ? list[0].id : 'file_default'
+    if (list.length) {
+      id = list[0].id
+    } else if (isBrowserCleared()) {
+      // 已归档清理且文件列表为空：不写入虚假 current，返回空串由调用方兜底
+      return ''
+    } else {
+      id = 'file_default'
+    }
     localStorage.setItem(SIMPLE_MIND_MAP_CURRENT_FILE, id)
   }
   return id
@@ -114,6 +133,88 @@ export const getCurrentFile = () => {
 
 export const getFileById = id => {
   return getFileList().find(f => f.id === id) || null
+}
+
+// 当前“导图”的统一身份：目录模式下用 .smm 文件名，浏览器模式下用 fileId。
+// 复习记录、重点标记、历史等所有与导图挂钩的元数据都应使用该身份，避免两种模式混用。
+export const getCurrentMapIdentity = () => {
+  if (vuexStore.state.isDirectoryMode) {
+    const name = directoryStorage.getCurrentFileName() || ''
+    return { fileId: name, fileName: name.replace(/\.smm$/i, ''), isDirectory: true }
+  }
+  return { fileId: getCurrentFileId(), fileName: getCurrentFile() ? getCurrentFile().name : '', isDirectory: false }
+}
+
+// 读取某“导图身份”对应的正文数据（跨模式统一入口，供复习页定位/建树使用）。
+// 目录模式按文件名读本地文件（仅返回持久化 JSON，不做图片水合——调用方若只需
+// uid/父子结构时无需生成 blob URL，避免泄漏），浏览器模式读 localStorage。
+export const readMapDataByIdentity = async identity => {
+  const fileId = identity && (identity.fileId || identity)
+  if (!fileId) return null
+  const isDir =
+    (identity && identity.isDirectory) ||
+    (vuexStore.state.isDirectoryMode &&
+      typeof fileId === 'string' &&
+      fileId.toLowerCase().endsWith('.smm'))
+  if (isDir) {
+    const res = await directoryStorage.readRawMapFile(fileId)
+    if (!res || !res.ok) return null
+    try {
+      return JSON.parse(res.text)
+    } catch (e) {
+      return null
+    }
+  }
+  return readFileData(fileId)
+}
+
+// 恢复上次的工作目录并打开上次的导图（免重选）。
+// - withReauth=false：仅做静默查询；权限未授予时返回 { ok:false, needReauth:true }，
+//   由调用方（启动流程）决定是否等待用户手势。
+// - withReauth=true：必须在用户手势中调用；会用已保存的目录句柄静默续权（不再弹目录选择器），
+//   成功后进入工作目录模式并读回上次打开的导图，返回可直接 setData 的数据。
+export const resumeDirectoryMode = async (withReauth = false) => {
+  if (!(await directoryStorage.hasSavedDirectory())) {
+    return { ok: false, reason: 'no-handle' }
+  }
+  let res = await directoryStorage.restoreDirectory()
+  if (res && res.ok) {
+    // fallthrough: 权限已授予
+  } else if (res && res.needReauth && withReauth) {
+    try {
+      res = await directoryStorage.requestReauth()
+    } catch (e) {
+      return { ok: false, reason: 'reauth-error', error: e }
+    }
+  } else {
+    return res || { ok: false }
+  }
+  if (!res || !res.ok) return res || { ok: false }
+  // 打开上次的导图；没有则取目录中第一个
+  let target = res.currentFileName
+  if (!target) {
+    const files = await directoryStorage.listMapFiles()
+    target = files && files.length ? files[0] : ''
+  }
+  let opened = null
+  if (target) {
+    opened = await directoryStorage.openMapFile(target)
+    if (!opened || !opened.ok) opened = null
+  }
+  // 目录完全为空时新建一张默认导图：保证会话始终有可写目标，避免后续编辑静默丢失
+  if (!opened && directoryStorage.getDirectoryHandleValue()) {
+    const created = await directoryStorage.createMapFile('我的思维导图', undefined)
+    if (created && created.ok) {
+      opened = await directoryStorage.openMapFile(created.fileName)
+      if (!opened || !opened.ok) opened = null
+    }
+  }
+  return {
+    ok: true,
+    name: res.name,
+    fileName: opened ? opened.fileName : (target || ''),
+    data: opened ? opened.data : null
+  }
 }
 
 export const createFile = name => {
@@ -377,7 +478,16 @@ export const storeData = (data, immediate = false) => {
     if (vuexStore.state.isHandleLocalFile) {
       return
     }
-    const fileId = getCurrentFileId()
+    let fileId = getCurrentFileId()
+    // 已清理且尚无文件时的兜底：用户确实在浏览器模式下编辑并保存，
+    // 此时为他新建一个导图文件，避免写入空 id 的垃圾键。
+    if (!fileId && originData && (originData.root || originData.layout)) {
+      const created = createFile('我的思维导图')
+      if (created && created.id) {
+        localStorage.setItem(SIMPLE_MIND_MAP_CURRENT_FILE, created.id)
+        fileId = created.id
+      }
+    }
     const doWrite = () => {
       storageTimer = null
       pendingTask = null
@@ -443,10 +553,13 @@ export const flushStore = () => {
 // 与 localStorage 的 storageTimer 隔离，避免互相干扰。
 
 const DIRECTORY_SAVE_DELAY = 800
+// 目录模式自动历史快照节流（每张导图 60s 内最多一份）
+const DIRECTORY_AUTO_SNAPSHOT_INTERVAL = 60000
 let directorySaveTimer = null
 let directoryPendingData = null
 let directorySaving = false
 let directorySaveAgain = false
+let directoryLastSnapshotTime = {}
 
 const directoryFlushSave = async () => {
   if (directorySaving) {
@@ -462,7 +575,11 @@ const directoryFlushSave = async () => {
     if (fileName) {
       // 注意：saveMapFile 内部深拷贝后再外置图片，不会污染内存中的水合数据。
       // 内存缓存保持 blob URL / base64 的渲染版本，落盘版本才是相对路径。
-      await directoryStorage.saveMapFile(fileName, data)
+      const res = await directoryStorage.saveMapFile(fileName, data)
+      // 保存成功后节流触发“自动历史快照”（历史以文件形式保存在该导图 history/ 下）
+      if (res && res.ok && res.outData) {
+        autoDirectorySnapshot(fileName, res.outData)
+      }
     }
   } catch (error) {
     // 失败：保留本次数据，等待下一次变更自动重试；状态已在 adapter 中置 error
@@ -476,6 +593,22 @@ const directoryFlushSave = async () => {
       directoryFlushSave()
     }
   }
+}
+
+// 目录模式自动快照：节流 + 静默失败（不打扰用户编辑）
+const autoDirectorySnapshot = (fileName, data) => {
+  const now = Date.now()
+  const last = directoryLastSnapshotTime[fileName] || 0
+  if (now - last < DIRECTORY_AUTO_SNAPSHOT_INTERVAL) return
+  directoryLastSnapshotTime[fileName] = now
+  directoryStorage
+    .saveHistorySnapshot(fileName, data, false)
+    .catch(() => {})
+}
+
+// 切换导图时重置自动快照节流（保证新导图能及时产生首份快照）
+export const resetDirectorySnapshotThrottle = () => {
+  directoryLastSnapshotTime = {}
 }
 
 const directoryScheduleSave = data => {
@@ -492,6 +625,54 @@ export const flushDirectoryStore = async () => {
   clearTimeout(directorySaveTimer)
   directorySaveTimer = null
   await directoryFlushSave()
+}
+
+// ---------- 工作目录模式：历史版本（以文件形式存在每张导图 history/ 下） ----------
+// 目录模式历史不使用 localStorage；这里统一包一层，HistoryDialog 无需感知存储后端。
+
+export const getDirectorySnapshots = async () => {
+  const fileName = directoryStorage.getCurrentFileName()
+  if (!fileName) return []
+  return directoryStorage.getHistorySnapshots(fileName)
+}
+
+export const saveDirectorySnapshot = async manual => {
+  const fileName = directoryStorage.getCurrentFileName()
+  if (!fileName) return { ok: false, message: '尚未打开导图' }
+  // 落盘前确保最新的数据先写入正文（快照与当前内容一致）
+  await flushDirectoryStore()
+  const data = dataCache
+  if (!data) return { ok: false, message: '没有可保存的数据' }
+  return directoryStorage.saveHistorySnapshot(fileName, data, !!manual)
+}
+
+export const deleteDirectorySnapshot = async snapshotName => {
+  const fileName = directoryStorage.getCurrentFileName()
+  if (!fileName) return { ok: false }
+  return directoryStorage.deleteHistorySnapshot(fileName, snapshotName)
+}
+
+export const clearDirectorySnapshots = async () => {
+  const fileName = directoryStorage.getCurrentFileName()
+  if (!fileName) return { ok: false }
+  return directoryStorage.clearHistorySnapshots(fileName)
+}
+
+// 恢复某个历史版本：用当前导图的 layout/theme，替换 root/view（图片引用已水合）
+export const restoreDirectorySnapshot = async snapshotName => {
+  const fileName = directoryStorage.getCurrentFileName()
+  if (!fileName) return { ok: false, message: '尚未打开导图' }
+  const res = await directoryStorage.restoreHistorySnapshot(fileName, snapshotName)
+  if (!res || !res.ok) return res || { ok: false, message: '恢复失败' }
+  const cur = dataCache || {}
+  return {
+    ok: true,
+    data: {
+      ...cur,
+      root: (res.data && res.data.root) || cur.root,
+      view: (res.data && res.data.view) || cur.view
+    }
+  }
 }
 
 // 获取思维导图配置数据

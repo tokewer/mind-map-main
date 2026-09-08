@@ -5,15 +5,19 @@ import { notifyWorkspaceChanged } from '@/api/workspaceEvents'
 // 节点以 uid（simple-mind-map 全局唯一）为键，与导图内容解耦
 const REVIEW_KEY = 'MIND_MAP_REVIEW_DATA'
 const DEFAULT_CYCLES = [1, 3, 4]
-const DATA_VERSION = 4
+const DATA_VERSION = 5
 
-// 周期预设
-export const CYCLE_PRESETS = {
-  ebbinghaus: { name: '艾宾浩斯 (标准)', cycles: [1, 2, 7, 15, 30, 60, 120] },
-  common: { name: '通用 (均衡)', cycles: [1, 3, 7, 14, 30] },
-  dense: { name: '密集 (短期攻坚)', cycles: [1, 1, 2, 3, 5] },
-  loose: { name: '宽松 (长期维护)', cycles: [3, 7, 15, 30, 90] }
-}
+// 内置周期预设种子：首次运行时写入 presets，用户可增删改
+const DEFAULT_PRESETS = [
+  { id: 'preset_ebbinghaus', name: '艾宾浩斯', cycles: [1, 2, 4, 7, 15] },
+  { id: 'preset_common', name: '常用', cycles: [1, 3, 7] },
+  { id: 'preset_dense', name: '密集', cycles: [1, 1, 3, 3, 7] },
+  { id: 'preset_loose', name: '宽松', cycles: [3, 7, 15, 30] }
+]
+
+// 生成预设 id
+const createPresetId = () =>
+  'preset_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7)
 
 // 解析周期字符串："1d-3d-4d" / "1,3,4" / "1 3 4" / [1,3,4] → [1,3,4]
 export const parseCycles = str => {
@@ -80,6 +84,26 @@ export const getIntervalDays = (node, index) => {
   return base
 }
 
+// 确保 presets 结构完整。仅当 presets 字段缺失（首次运行 / 旧版数据）时播种内置预设；
+// 用户删除内置预设后（presets 已存在，即使为空数组），不自动恢复，尊重删除操作。
+const normalizePresets = data => {
+  if (data.presets === undefined || data.presets === null) {
+    data.presets = DEFAULT_PRESETS.map(d => ({
+      id: d.id,
+      name: d.name,
+      cycles: parseCycles(d.cycles)
+    }))
+  }
+  data.presets = data.presets
+    .filter(p => p && p.id && p.name && Array.isArray(p.cycles) && p.cycles.length)
+    .map(p => ({ id: p.id, name: String(p.name), cycles: parseCycles(p.cycles) }))
+  // 激活的预设 id 不存在时清空，回退为“自定义周期”
+  if (!data.presets.some(p => p.id === data.activePresetId)) {
+    data.activePresetId = null
+  }
+  return data
+}
+
 // ---------- 数据迁移 ----------
 const migrate = data => {
   const nodes = data.nodes || {}
@@ -112,7 +136,7 @@ const migrate = data => {
     n.version = DATA_VERSION
   })
   data.version = DATA_VERSION
-  return data
+  return normalizePresets(data)
 }
 
 // 由复习数据推导掌握度
@@ -172,10 +196,19 @@ export const getReviewStage = node => {
 const load = () => {
   try {
     const raw = localStorage.getItem(REVIEW_KEY)
-    if (!raw) return { version: DATA_VERSION, defaultCycles: [...DEFAULT_CYCLES], nodes: {} }
+    if (!raw) {
+      const fresh = normalizePresets({
+        version: DATA_VERSION,
+        defaultCycles: [...DEFAULT_CYCLES],
+        activePresetId: null,
+        nodes: {}
+      })
+      return fresh
+    }
     const data = JSON.parse(raw)
     const merged = {
       defaultCycles: [...DEFAULT_CYCLES],
+      activePresetId: null,
       nodes: {},
       ...data
     }
@@ -183,7 +216,13 @@ const load = () => {
     merged.version = Number(data.version) || 1
     return migrate(merged)
   } catch (e) {
-    return { version: DATA_VERSION, defaultCycles: [...DEFAULT_CYCLES], nodes: {} }
+    const fresh = normalizePresets({
+      version: DATA_VERSION,
+      defaultCycles: [...DEFAULT_CYCLES],
+      activePresetId: null,
+      nodes: {}
+    })
+    return fresh
   }
 }
 
@@ -215,9 +254,93 @@ export const getReviewData = () => load()
 
 export const getDefaultCycles = () => load().defaultCycles
 
+// 手动设置默认周期时同步激活态：与某个预设完全一致则指向该预设，否则视为自定义
 export const setDefaultCycles = cycles => {
   const data = load()
-  data.defaultCycles = parseCycles(cycles)
+  const parsed = parseCycles(cycles)
+  if (!parsed.length) return
+  data.defaultCycles = parsed
+  const matched = data.presets.find(
+    p => cyclesToStr(p.cycles) === cyclesToStr(parsed)
+  )
+  data.activePresetId = matched ? matched.id : null
+  save(data)
+}
+
+// ---------- 周期预设（命名周期库） ----------
+
+// 预设列表
+export const getPresets = () => load().presets
+
+// 当前激活的预设（导图页快速切换使用）；无则返回 null（自定义周期）
+export const getActivePreset = () => {
+  const data = load()
+  return (
+    data.presets.find(p => p.id === data.activePresetId) || null
+  )
+}
+
+// 新增预设：name 必填、cycles 需为合法序列；重名时自动追加序号
+export const addPreset = ({ name = '', cycles = null } = {}) => {
+  const data = load()
+  const trimmed = String(name).trim()
+  if (!trimmed) return null
+  const parsed = parseCycles(cycles)
+  if (!parsed.length) return null
+  const base = trimmed
+  let candidate = base
+  let seq = 2
+  while (data.presets.some(p => p.name === candidate)) {
+    candidate = base + ' ' + seq
+    seq++
+  }
+  const preset = { id: createPresetId(), name: candidate, cycles: parsed }
+  data.presets.push(preset)
+  save(data)
+  return preset
+}
+
+// 更新预设（改名/改周期）。若更新的是当前激活预设，默认周期同步跟随。
+export const updatePreset = (id, { name, cycles } = {}) => {
+  const data = load()
+  const preset = data.presets.find(p => p.id === id)
+  if (!preset) return null
+  if (typeof name === 'string' && name.trim()) preset.name = name.trim()
+  const parsed = parseCycles(cycles)
+  if (parsed.length) preset.cycles = parsed
+  if (data.activePresetId === id) {
+    data.defaultCycles = [...preset.cycles]
+  }
+  save(data)
+  return preset
+}
+
+// 删除预设；若删除的是当前激活预设，则回到自定义周期（保留 defaultCycles）
+export const deletePreset = id => {
+  const data = load()
+  const idx = data.presets.findIndex(p => p.id === id)
+  if (idx === -1) return false
+  data.presets.splice(idx, 1)
+  if (data.activePresetId === id) data.activePresetId = null
+  save(data)
+  return true
+}
+
+// 切换当前使用的预设（导图页/复习页通用）：把该预设的周期设为默认周期
+export const setActivePreset = id => {
+  const data = load()
+  const preset = data.presets.find(p => p.id === id)
+  if (!preset) return null
+  data.activePresetId = id
+  data.defaultCycles = [...preset.cycles]
+  save(data)
+  return preset
+}
+
+// 将当前默认周期标记为“自定义”（不使用任何预设）
+export const clearActivePreset = () => {
+  const data = load()
+  data.activePresetId = null
   save(data)
 }
 
@@ -524,6 +647,33 @@ export const postponeReview = uid => {
   const today = todayStr()
   node.nextReview = addDays(node.nextReview > today ? node.nextReview : today, 1)
   node.updatedAt = today
+  save(data)
+  return node
+}
+
+// “忘了”快捷评价：记一次错误并把下次复习推迟到 N 天后（由用户自选天数）。
+// 与 rateReview(FORGOT) 的区别：不只重置到今天，而是允许指定复习日期。
+export const forgotReview = (uid, days = 1) => {
+  const data = load()
+  const node = data.nodes[uid]
+  if (!node) return null
+  const today = todayStr()
+  const wait = Math.max(1, Math.min(365, Number(days) || 1))
+  node.times += 1
+  node.lastReview = today
+  node.lastRating = RATING.FORGOT
+  node.errorCount += 1
+  node.consecutiveSuccess = 0
+  node.nextCycleIndex = 0
+  node.nextReview = addDays(today, wait)
+  node.status = 'learning'
+  node.mastery = deriveMastery(node)
+  node.stage = getReviewStage(node)
+  node.updatedAt = today
+  node.ratingHistory.push({ date: today, rating: RATING.FORGOT, days: wait })
+  if (node.ratingHistory.length > 100) node.ratingHistory = node.ratingHistory.slice(-100)
+  node.history.push({ date: today, action: 'review', times: node.times, rating: RATING.FORGOT, days: wait })
+  if (node.history.length > 100) node.history = node.history.slice(-100)
   save(data)
   return node
 }

@@ -29,11 +29,19 @@
         </div>
         <div class="dirSection" v-else>
           <div class="dirInfo">
-            <span class="dirTip">导图以 .smm 文件保存在本地文件夹，图片外置到 images/</span>
+            <span class="dirTip">每张导图保存为工作目录中的一个文件夹（数据 + images/ + history/），点击下方“选择工作目录”开始使用</span>
           </div>
           <div class="dirActions">
             <el-button size="mini" type="primary" @click="onSelectDirectory">选择工作目录</el-button>
+            <el-button
+              size="mini"
+              type="success"
+              plain
+              v-if="hasSavedDir"
+              @click="onResumeDirectory"
+            >恢复上次目录</el-button>
           </div>
+          <div class="dirTip" v-if="hasSavedDir">检测到上次使用的工作目录，点“恢复上次目录”即可继续使用，无需重新选择。</div>
         </div>
 
         <div class="panelActions">
@@ -51,6 +59,20 @@
           <el-button size="mini" @click="onHistory">历史版本</el-button>
           <el-button size="mini" @click="onTrash">回收站</el-button>
           <el-button size="mini" @click="onReview">复习页</el-button>
+        </div>
+
+        <!-- 浏览器存储残留提示 + 归档清理（不混用已设置的工作目录） -->
+        <div class="dirSection residueSection" v-if="browserResidue">
+          <div class="dirInfo">
+            <span class="dirTip">
+              {{ isDirectoryMode
+                ? `浏览器内置存储中还有 ${browserResidue} 个旧导图残留`
+                : `检测到 ${browserResidue} 个导图仍保存在浏览器内置存储中（尚未设置工作目录）` }}。可归档到额外文件夹后从浏览器清空，不会触碰你已设置的工作目录。
+            </span>
+          </div>
+          <div class="dirActions">
+            <el-button size="mini" type="warning" plain @click="onArchiveBrowserMaps">归档并清空</el-button>
+          </div>
         </div>
         <div class="fileList">
           <div
@@ -93,9 +115,12 @@ import {
   readFileData,
   flushStore,
   clearDataCache,
-  flushDirectoryStore
+  flushDirectoryStore,
+  resetDirectorySnapshotThrottle,
+  resumeDirectoryMode
 } from '@/api'
 import * as directoryStorage from '@/api/directoryStorage'
+import { archiveBrowserMaps, clearBrowserMaps, countUnclearedBrowserMaps } from '@/api/browserCleanup'
 import { renameFileForReviews } from '@/review'
 import {
   saveWorkspaceFile,
@@ -114,7 +139,9 @@ export default {
       popoverVisible: false,
       fileList: [],
       currentId: '',
-      saveStatus: ''
+      saveStatus: '',
+      hasSavedDir: false,
+      browserResidue: 0
     }
   },
   computed: {
@@ -154,6 +181,9 @@ export default {
   },
   methods: {
     async refresh() {
+      // 浏览器残留数量（目录/浏览器两种模式都需展示；读取不触发默认文件重建）
+      this.browserResidue = countUnclearedBrowserMaps()
+      this.hasSavedDir = await directoryStorage.hasSavedDirectory()
       if (this.isDirectoryMode) {
         const files = await directoryStorage.listMapFiles()
         this.fileList = (files || []).map(name => ({
@@ -167,6 +197,77 @@ export default {
       }
       this.fileList = getFileList()
       this.currentId = getCurrentFileId()
+    },
+
+    // 归档浏览器存储到额外文件夹并清空（绝不混用已设置的工作目录）
+    async onArchiveBrowserMaps() {
+      this.popoverVisible = false
+      const count = this.browserResidue
+      if (!count) return
+      try {
+        await this.$confirm(
+          `将把浏览器内置存储中的 ${count} 个导图（含历史版本）导出到一个「额外文件夹」（需你选择，不会写入你已设置的工作目录），成功后从浏览器存储中清空。继续？`,
+          '清理浏览器存储',
+          { confirmButtonText: '选择文件夹并归档', cancelButtonText: '取消', type: 'warning' }
+        )
+      } catch (e) {
+        return
+      }
+      const res = await archiveBrowserMaps()
+      if (!res || !res.ok) {
+        if (res && res.unsupported) {
+          this.$message.warning('当前浏览器不支持文件系统访问，无法归档到文件夹')
+        } else if (res && !res.cancelled) {
+          this.$message.warning((res && res.message) || '归档失败，浏览器存储未做改动')
+        }
+        return
+      }
+      if (res.empty) {
+        this.$message.info('浏览器中暂无可归档的导图')
+        this.refresh()
+        return
+      }
+      const removed = clearBrowserMaps()
+      this.$message.success(
+        `已把 ${res.count} 个导图归档到「${res.name}」，并从浏览器存储清空 ${removed} 个文件`
+      )
+      // 重新加载：以干净的浏览器（或自动恢复的工作目录）状态呈现，
+      // 确保各处（文件列表/存储用量/画布）一致且不再出现残留内容。
+      await this.saveBeforeFileChange()
+      setTimeout(() => window.location.reload(), 800)
+    },
+
+    // 恢复上次使用的工作目录（用已保存的句柄，无需重新选择目录）
+    async onResumeDirectory() {
+      this.popoverVisible = false
+      try {
+        const res = await resumeDirectoryMode(true)
+        if (!res || !res.ok) {
+          if (res && res.denied) {
+            this.$message.warning('未获得目录权限，可重新选择工作目录')
+          } else if (res && (res.reason === 'no-handle' || res.reason === undefined)) {
+            this.$message.info('暂无可恢复的工作目录')
+          } else {
+            this.$message.warning(((res && res.message) || '恢复失败，请重新选择工作目录'))
+          }
+          return
+        }
+        this.$store.commit('setIsDirectoryMode', true)
+        this.$store.commit('setDirectoryName', res.name || '')
+        if (res.fileName) {
+          this.$store.commit('setCurrentSmmFile', res.fileName)
+        }
+        if (res.data) {
+          clearDataCache()
+          resetDirectorySnapshotThrottle()
+          this.$bus.$emit('setData', res.data)
+        }
+        this.refresh()
+        this.$message.success('已恢复工作目录：' + (res.name || ''))
+      } catch (e) {
+        console.error('恢复工作目录失败', e)
+        this.$message.warning('恢复失败，请重新选择工作目录')
+      }
     },
     formatTime(t) {
       if (!t) return ''
@@ -193,6 +294,7 @@ export default {
           return
         }
         clearDataCache()
+        resetDirectorySnapshotThrottle()
         this.$store.commit('setCurrentSmmFile', opened.fileName)
         this.$bus.$emit('setData', opened.data)
         this.refresh()
@@ -256,6 +358,7 @@ export default {
             const opened = await directoryStorage.openMapFile(res.fileName)
             if (opened && opened.ok) {
               clearDataCache()
+              resetDirectorySnapshotThrottle()
               this.$store.commit('setCurrentSmmFile', opened.fileName)
               this.$bus.$emit('setData', opened.data)
             }
@@ -347,6 +450,8 @@ export default {
               if (files && files.length) {
                 const opened = await directoryStorage.openMapFile(files[0])
                 if (opened && opened.ok) {
+                  clearDataCache()
+                  resetDirectorySnapshotThrottle()
                   this.$store.commit('setCurrentSmmFile', opened.fileName)
                   this.$bus.$emit('setData', opened.data)
                 }
@@ -416,6 +521,8 @@ export default {
       if (target) {
         const opened = await directoryStorage.openMapFile(target)
         if (opened && opened.ok) {
+          clearDataCache()
+          resetDirectorySnapshotThrottle()
           this.$store.commit('setCurrentSmmFile', opened.fileName)
           this.$bus.$emit('setData', opened.data)
         }
@@ -425,6 +532,8 @@ export default {
         if (created && created.ok) {
           const opened = await directoryStorage.openMapFile(created.fileName)
           if (opened && opened.ok) {
+            clearDataCache()
+            resetDirectorySnapshotThrottle()
             this.$store.commit('setCurrentSmmFile', opened.fileName)
             this.$bus.$emit('setData', opened.data)
           }

@@ -150,25 +150,91 @@
             placeholder="搜索节点名称 / 路径"
             size="small"
             clearable
-            style="width: 260px;"
+            style="width: 220px;"
           ></el-input>
           <div class="rightOps">
-            <el-select
-              v-model="filterFile"
-              placeholder="全部文件"
-              size="small"
-              clearable
-              style="width: 180px;"
-            >
-              <el-option
-                v-for="f in fileGroups"
-                :key="f.key"
-                :label="f.fileName + '（' + f.count + '）'"
-                :value="f.key"
-              ></el-option>
-            </el-select>
             <el-button size="small" type="primary" @click="activeTab = 'add'">+ 添加复习</el-button>
           </div>
+        </div>
+
+        <!-- 筛选 / 排序行 -->
+        <div class="filterRow">
+          <el-select
+            v-model="fStatus"
+            placeholder="状态"
+            size="small"
+            clearable
+            class="frSelect"
+          >
+            <el-option
+              v-for="o in STATUS_OPTIONS"
+              :key="o.value"
+              :label="o.label"
+              :value="o.value"
+            ></el-option>
+          </el-select>
+          <el-select
+            v-model="fDue"
+            placeholder="到期"
+            size="small"
+            clearable
+            class="frSelect"
+          >
+            <el-option
+              v-for="o in DUE_OPTIONS"
+              :key="o.value"
+              :label="o.label"
+              :value="o.value"
+            ></el-option>
+          </el-select>
+          <el-select
+            v-model="filterFile"
+            placeholder="全部文件"
+            size="small"
+            clearable
+            class="frSelect"
+          >
+            <el-option
+              v-for="f in fileGroups"
+              :key="f.key"
+              :label="f.fileName + '（' + f.count + '）'"
+              :value="f.key"
+            ></el-option>
+          </el-select>
+          <el-select
+            v-model="fTag"
+            placeholder="标签"
+            size="small"
+            clearable
+            class="frSelect"
+          >
+            <el-option
+              v-for="t in allTags"
+              :key="t"
+              :label="t"
+              :value="t"
+            ></el-option>
+          </el-select>
+          <el-select
+            v-model="sortMode"
+            placeholder="排序"
+            size="small"
+            class="frSelect"
+          >
+            <el-option
+              v-for="o in SORT_OPTIONS"
+              :key="o.value"
+              :label="o.label"
+              :value="o.value"
+            ></el-option>
+          </el-select>
+          <el-button
+            v-if="filterActive"
+            size="small"
+            type="text"
+            class="frClear"
+            @click="clearReviewFilters"
+          >清除筛选</el-button>
         </div>
 
         <!-- 按文件分组，组内按父子级树形显示 -->
@@ -224,7 +290,7 @@
           </div>
         </div>
         <div v-if="groupedList.length === 0" class="emptyTip">
-          暂无复习节点{{ filterFile ? '（当前筛选）' : '' }}
+          暂无复习节点{{ filterActive ? '（当前筛选）' : '' }}
         </div>
       </el-tab-pane>
 
@@ -300,13 +366,14 @@
             <el-form-item label="复习周期">
               <el-input v-model="addCycles" :placeholder="'如 1,3,4（默认：' + defaultCyclesStr + '）'"></el-input>
               <div class="presetRow">
-                <span class="presetLabel">常用预设：</span>
+                <span class="presetLabel">预设：</span>
                 <el-button
                   size="mini"
-                  v-for="p in cyclePresets"
-                  :key="p.name"
-                  @click="addCycles = p.value"
-                >{{ p.name }}（{{ p.value }}）</el-button>
+                  v-for="p in presetList"
+                  :key="p.id"
+                  :type="p.id === activePresetId ? 'primary' : ''"
+                  @click="addCycles = cyclesToStr(p.cycles)"
+                >{{ p.name }}（{{ cyclesToStr(p.cycles) }}）</el-button>
               </div>
             </el-form-item>
             <el-form-item>
@@ -327,13 +394,30 @@
             </div>
             <div class="setTip">新加入复习的节点将默认使用该周期，可在加入时单独修改。</div>
             <div class="presetRow">
-              <span class="presetLabel">常用预设：</span>
+              <span class="presetLabel">设为预设：</span>
               <el-button
                 size="mini"
-                v-for="p in cyclePresets"
-                :key="p.name"
-                @click="defaultCyclesStr = p.value"
-              >{{ p.name }}（{{ p.value }}）</el-button>
+                v-for="p in presetList"
+                :key="p.id"
+                :type="p.id === activePresetId ? 'primary' : ''"
+                @click="onApplyPreset(p)"
+              >{{ p.name }}（{{ cyclesToStr(p.cycles) }}）</el-button>
+            </div>
+            <div class="presetManageRow">
+              <span class="presetLabel">管理：</span>
+              <el-button size="mini" type="success" plain @click="openPresetDialog()">＋ 新建预设</el-button>
+              <el-button size="mini" v-if="activePresetId" plain @click="onClearActivePreset">取消使用预设</el-button>
+            </div>
+            <div class="presetListManage" v-if="presetList.length">
+              <div class="presetItem" v-for="p in presetList" :key="p.id" :class="{ active: p.id === activePresetId }">
+                <span class="presetName">{{ p.name }}</span>
+                <span class="presetCycles">{{ cyclesToStr(p.cycles) }}</span>
+                <span class="presetTag" v-if="p.id === activePresetId">使用中</span>
+                <div class="presetOps">
+                  <el-button size="mini" type="text" @click="openPresetDialog(p)">编辑</el-button>
+                  <el-button size="mini" type="text" class="danger" @click="onDeletePreset(p)">删除</el-button>
+                </div>
+              </div>
             </div>
           </div>
           <div class="setGroup">
@@ -445,13 +529,14 @@
           <el-form-item label="周期">
             <el-input v-model="editCycles" placeholder="如 1,3,4"></el-input>
             <div class="presetRow">
-              <span class="presetLabel">常用预设：</span>
+              <span class="presetLabel">预设：</span>
               <el-button
                 size="mini"
-                v-for="p in cyclePresets"
-                :key="p.name"
-                @click="editCycles = p.value"
-              >{{ p.name }}（{{ p.value }}）</el-button>
+                v-for="p in presetList"
+                :key="p.id"
+                :type="p.id === activePresetId ? 'primary' : ''"
+                @click="editCycles = cyclesToStr(p.cycles)"
+              >{{ p.name }}（{{ cyclesToStr(p.cycles) }}）</el-button>
             </div>
           </el-form-item>
           <el-form-item label="复习频率">
@@ -508,6 +593,28 @@
         <el-button size="small" type="primary" @click="onSaveEdit">保存</el-button>
       </div>
     </el-dialog>
+
+    <!-- 周期预设 新建/编辑 -->
+    <el-dialog
+      :title="presetEditId ? '编辑预设' : '新建预设'"
+      :visible.sync="presetDialogVisible"
+      width="420px"
+      append-to-body
+    >
+      <el-form label-width="80px" size="small">
+        <el-form-item label="名称">
+          <el-input v-model="presetEditName" placeholder="如：期末冲刺"></el-input>
+        </el-form-item>
+        <el-form-item label="周期">
+          <el-input v-model="presetEditCycles" placeholder="如：1,3,7,15"></el-input>
+          <div class="tip">间隔天数序列，用逗号/横线分隔，如 1,3,7,15。</div>
+        </el-form-item>
+      </el-form>
+      <div slot="footer" class="dialog-footer">
+        <el-button size="small" @click="presetDialogVisible = false">取消</el-button>
+        <el-button size="small" type="primary" @click="onSavePreset">保存</el-button>
+      </div>
+    </el-dialog>
   </div>
 </template>
 
@@ -528,6 +635,13 @@ import {
   cyclesToStr,
   getDefaultCycles,
   setDefaultCycles,
+  getPresets,
+  getActivePreset,
+  addPreset,
+  updatePreset,
+  deletePreset,
+  setActivePreset,
+  clearActivePreset,
   exportReviewData,
   importReviewData,
   rateReview,
@@ -540,7 +654,14 @@ import {
   markdownToCards
 } from '@/review'
 import { getFileList, getLocalConfig, readFileData } from '@/api'
-import { buildParentMap, buildReviewGroups, getReviewFileKey } from '@/review/tree'
+import * as directoryStorage from '@/api/directoryStorage'
+import { buildParentMap, buildReviewGroups, getReviewFileKey, toDirectorySubjectList } from '@/review/tree'
+import {
+  STATUS_OPTIONS,
+  DUE_OPTIONS,
+  SORT_OPTIONS,
+  applyReviewList
+} from '@/review/listTools'
 import { getReviewGlowConfig, normalizeReviewGlowConfig } from '@/review/glowConfig'
 import {
   saveWorkspaceFile,
@@ -577,6 +698,11 @@ export default {
       activeTab: 'today',
       keyword: '',
       filterFile: '',
+      // 附加筛选 / 排序（「全部节点」列表用，会话态）
+      fStatus: '',
+      fDue: '',
+      fTag: '',
+      sortMode: 'urgency',
       dueList: [],
       allList: [],
       stats: { total: 0, learning: 0, mastered: 0, todayDone: 0, todayDue: 0 },
@@ -586,13 +712,14 @@ export default {
       fileListForAdd: [],
       defaultCyclesStr: '',
       glowConfig: getReviewGlowConfig(),
-      cyclePresets: [
-        { name: '艾宾浩斯', value: '1,2,4,7,15' },
-        { name: '常用', value: '1,3,7' },
-        { name: '密集', value: '1,1,3,3,7' },
-        { name: '宽松', value: '3,7,15,30' },
-        { name: '自定义', value: '1,3,4' }
-      ],
+      // 周期预设（统一来源于 review 数据层，可增删改）
+      presetList: [],
+      activePresetId: '',
+      // 预设管理弹窗
+      presetDialogVisible: false,
+      presetEditId: '', // 空=新建
+      presetEditName: '',
+      presetEditCycles: '',
       fileDataBytes: 0,
       historyBytes: 0,
       reviewBytes: 0,
@@ -616,6 +743,16 @@ export default {
     }
   },
   computed: {
+    // 导入的选项常量包装给模板（Vue2 模板不能直接访问 import 值）
+    STATUS_OPTIONS() {
+      return STATUS_OPTIONS
+    },
+    DUE_OPTIONS() {
+      return DUE_OPTIONS
+    },
+    SORT_OPTIONS() {
+      return SORT_OPTIONS
+    },
     // 结构化搜索：支持 tag:xxx status:weak due:today error:high 和普通关键词
     filteredList() {
       const kw = this.keyword.trim()
@@ -686,12 +823,29 @@ export default {
     dueGroups() {
       return this.withTreeGroups(this.dueList)
     },
-    // 按文件分组后的节点列表（应用搜索 + 文件筛选 + 父子级层级）
-    groupedList() {
-      const base = this.filteredList.filter(
-        n => !this.filterFile || getReviewFileKey(n) === this.filterFile
+    // 附加筛选 / 排序是否生效（含文件筛选与默认排序判断）
+    filterActive() {
+      return !!(
+        this.fStatus ||
+        this.fDue ||
+        this.fTag ||
+        this.filterFile ||
+        this.sortMode !== 'urgency'
       )
-      return this.withTreeGroups(base)
+    },
+    // 已应用搜索 + 附加筛选 + 排序的列表
+    appliedList() {
+      return applyReviewList(this.filteredList, {
+        status: this.fStatus,
+        due: this.fDue,
+        file: this.filterFile || '',
+        tag: this.fTag,
+        sort: this.sortMode
+      })
+    },
+    // 按文件分组后的节点列表（应用搜索 + 筛选 + 排序 + 父子级层级）
+    groupedList() {
+      return this.withTreeGroups(this.appliedList)
     },
     // 当前正在复习的项
     currentReview() {
@@ -724,13 +878,19 @@ export default {
       return type => CARD_TYPE_MAP[type] || type || '问答'
     },
     ...mapState({
-      isDark: state => state.localConfig.isDark
+      isDark: state => state.localConfig.isDark,
+      isDirectoryMode: state => state.isDirectoryMode
     }),
     isServerAvailable() {
       return isServerAvailable()
     }
   },
   created() {
+    // 支持从导图页“管理预设”带 tab 跳转：?tab=settings
+    const qTab = this.$route && this.$route.query && this.$route.query.tab
+    if (['today', 'all', 'weak', 'add', 'settings'].includes(qTab)) {
+      this.activeTab = qTab
+    }
     const savedLocalConfig = getLocalConfig()
     if (savedLocalConfig) {
       this.setLocalConfig({
@@ -757,6 +917,13 @@ export default {
   },
   methods: {
     ...mapMutations(['setLocalConfig']),
+    clearReviewFilters() {
+      this.fStatus = ''
+      this.fDue = ''
+      this.fTag = ''
+      this.filterFile = ''
+      this.sortMode = 'urgency'
+    },
     onGlowConfigChange() {
       this.glowConfig = normalizeReviewGlowConfig(this.glowConfig)
       this.setLocalConfig({ reviewGlow: { ...this.glowConfig } })
@@ -766,6 +933,11 @@ export default {
       const parentMaps = {}
       ;(list || []).forEach(item => {
         if (!item.fileId || parentMaps[item.fileId]) return
+        if (this.isDirectoryMode) {
+          // 目录模式：正文在工作目录文件中；记录已自带 parentUid/path，
+          // 分组仅需这些字段即可，无需读取整张导图文件。
+          return
+        }
         parentMaps[item.fileId] = buildParentMap(readFileData(item.fileId))
       })
       return buildReviewGroups(list, parentMaps).map(group => ({
@@ -777,13 +949,34 @@ export default {
     cyclesToStr(cycles) {
       return cyclesToStr(cycles)
     },
-    refresh() {
-      this.dueList = todayList()
-      this.allList = getNodeList()
+    async refresh() {
+      // 目录模式下把复习记录归一为现役科目导图的 fileId（<科目>.smm），
+      // 让历史 fileId（浏览器旧代次）归并到同一科目组、并可被定位命中现役导图。
+      // 仅做展示层派生，不写回存储。
+      const rawDue = todayList()
+      const rawAll = getNodeList()
+      this.dueList = toDirectorySubjectList(rawDue, this.isDirectoryMode)
+      this.allList = toDirectorySubjectList(rawAll, this.isDirectoryMode)
       this.stats = getStats()
       this.defaultCyclesStr = cyclesToStr(getDefaultCycles())
-      this.fileListForAdd = getFileList()
       this.allTags = getAllTags()
+      this.presetList = getPresets()
+      const active = getActivePreset()
+      this.activePresetId = active ? active.id : ''
+      // “添加复习”的可选文件：目录模式下列出工作目录中的导图
+      if (this.isDirectoryMode) {
+        try {
+          const files = await directoryStorage.listMapFiles()
+          this.fileListForAdd = (files || []).map(name => ({
+            id: name,
+            name: name.replace(/\.smm$/i, '')
+          }))
+        } catch (e) {
+          this.fileListForAdd = []
+        }
+      } else {
+        this.fileListForAdd = getFileList()
+      }
       this.calcStorageUsage()
     },
     // 统计本应用各部分的 localStorage 占用（UTF-16 每字符 2 字节）
@@ -970,6 +1163,59 @@ export default {
       }
       setDefaultCycles(parsed)
       this.$message.success('默认周期已保存')
+      this.afterChange()
+    },
+    // ---------- 周期预设管理 ----------
+    // 使用某预设作为当前默认周期
+    onApplyPreset(p) {
+      setActivePreset(p.id)
+      this.$message.success('已切换预设：' + p.name + '（' + cyclesToStr(p.cycles) + '）')
+      this.afterChange()
+    },
+    onClearActivePreset() {
+      clearActivePreset()
+      this.$message.success('已取消预设，使用自定义周期')
+      this.afterChange()
+    },
+    openPresetDialog(p) {
+      this.presetEditId = p ? p.id : ''
+      this.presetEditName = p ? p.name : ''
+      this.presetEditCycles = p ? cyclesToStr(p.cycles) : ''
+      this.presetDialogVisible = true
+    },
+    onSavePreset() {
+      const name = this.presetEditName.trim()
+      if (!name) {
+        this.$message.warning('请输入预设名称')
+        return
+      }
+      const parsed = parseCycles(this.presetEditCycles)
+      if (!parsed.length) {
+        this.$message.warning('周期格式不正确')
+        return
+      }
+      if (this.presetEditId) {
+        updatePreset(this.presetEditId, { name, cycles: parsed })
+        this.$message.success('预设已更新')
+      } else {
+        addPreset({ name, cycles: parsed })
+        this.$message.success('预设已创建')
+      }
+      this.presetDialogVisible = false
+      this.afterChange()
+    },
+    onDeletePreset(p) {
+      this.$confirm(`删除预设「${p.name}」？已加入复习的节点周期不受影响。`, '删除预设', {
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
+        type: 'warning'
+      })
+        .then(() => {
+          deletePreset(p.id)
+          this.$message.success('预设已删除')
+          this.afterChange()
+        })
+        .catch(() => {})
     },
     async onSaveWorkspace() {
       try {
@@ -1401,11 +1647,27 @@ export default {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 14px;
+    margin-bottom: 10px;
 
     .rightOps {
       display: flex;
       gap: 8px;
+    }
+  }
+
+  .filterRow {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 14px;
+
+    .frSelect {
+      width: 150px;
+    }
+
+    .frClear {
+      margin-left: 4px;
     }
   }
 
@@ -1608,6 +1870,62 @@ export default {
         .presetLabel {
           font-size: 12px;
           color: #909399;
+        }
+      }
+
+      .presetManageRow {
+        margin-top: 10px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+
+        .presetLabel {
+          font-size: 12px;
+          color: #909399;
+        }
+      }
+
+      .presetListManage {
+        margin-top: 10px;
+        border-top: 1px dashed #ebeef5;
+
+        .presetItem {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          padding: 6px 0;
+          font-size: 13px;
+
+          .presetName {
+            font-weight: 600;
+          }
+
+          .presetCycles {
+            color: #909399;
+            font-size: 12px;
+          }
+
+          .presetTag {
+            font-size: 11px;
+            color: #409eff;
+            background: #ecf5ff;
+            border-radius: 3px;
+            padding: 1px 6px;
+          }
+
+          &.active {
+            background: #f5f7fa;
+            border-radius: 4px;
+            padding-left: 6px;
+          }
+
+          .presetOps {
+            margin-left: auto;
+
+            .danger {
+              color: #f56c6c;
+            }
+          }
         }
       }
 

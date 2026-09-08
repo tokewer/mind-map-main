@@ -93,10 +93,10 @@
         <span class="desc">Ctrl + V</span>
       </div>
       <div class="splitLine"></div>
-      <div class="item" @click="exec('REMOVE_HYPERLINK')" v-if="hasHyperlink">
+      <div class="item" @click="exec('REMOVE_HYPERLINK')" v-if="hasHyperlink()">
         <span class="name">{{ $t('contextmenu.removeHyperlink') }}</span>
       </div>
-      <div class="item" @click="exec('REMOVE_NOTE')" v-if="hasNote">
+      <div class="item" @click="exec('REMOVE_NOTE')" v-if="hasNote()">
         <span class="name">{{ $t('contextmenu.removeNote') }}</span>
       </div>
       <div class="item" @click="exec('REMOVE_CUSTOM_STYLES')">
@@ -123,6 +123,36 @@
           inReview ? $t('contextmenu.manageReview') : $t('contextmenu.addToReview')
         }}</span>
         <span class="desc">{{ inReview ? '√' : '' }}</span>
+      </div>
+      <!-- 快捷复习：直接在当前节点完成/评价一次复习（复用复习系统） -->
+      <div
+        class="item"
+        v-if="inReview"
+        :class="{ disabled: isGeneralization }"
+      >
+        <span class="name">⚡ 快捷复习</span>
+        <span class="el-icon-arrow-right"></span>
+        <div
+          class="subItems listBox"
+          :class="{ isDark: isDark, showLeft: subItemsShowLeft }"
+          style="top: -120px"
+        >
+          <div class="item quickReviewTip" v-if="quickReviewInfo">
+            {{ quickReviewInfo }}
+          </div>
+          <div class="item" @click="quickReview('remember')">
+            <span class="name">✅ 记得</span>
+            <span class="desc">推进周期</span>
+          </div>
+          <div class="item" @click="quickReview('fuzzy')">
+            <span class="name">🤔 模糊</span>
+            <span class="desc">缩短间隔</span>
+          </div>
+          <div class="item" @click="quickReview('forgot')">
+            <span class="name">😰 忘了</span>
+            <span class="desc">重新开始</span>
+          </div>
+        </div>
       </div>
       <div
         class="item"
@@ -214,8 +244,15 @@ import { transformToMarkdown } from 'simple-mind-map/src/parse/toMarkdown'
 import { transformToTxt } from 'simple-mind-map/src/parse/toTxt'
 import { setDataToClipboard, setImgToClipboard, copy } from '@/utils'
 import { numberTypeList, numberLevelList } from '@/config'
-import { getNode, getFocusStatus, toggleFocus } from '@/review'
-import { getCurrentFileId, getCurrentFile } from '@/api'
+import {
+  getNode,
+  getFocusStatus,
+  toggleFocus,
+  rateReview,
+  cyclesToStr,
+  RATING
+} from '@/review'
+import { getCurrentMapIdentity } from '@/api'
 
 // 右键菜单
 export default {
@@ -315,6 +352,14 @@ export default {
     inReview() {
       return this.node && !!getNode(this.node.uid)
     },
+    // 当前节点复习状态摘要（快捷复习子菜单展示）
+    quickReviewInfo() {
+      if (!this.node || !this.inReview) return ''
+      const n = getNode(this.node.uid)
+      if (!n) return ''
+      const cycle = n.cycles && n.cycles.length ? cyclesToStr(n.cycles) : ''
+      return `周期 ${cycle} · ${n.times}/${n.cycles ? n.cycles.length : 0}次 · 下次 ${n.nextReview || '已掌握'}`
+    },
     focusStatus() {
       if (!this.node) return false
       return getFocusStatus(this.node.uid)
@@ -343,10 +388,10 @@ export default {
   methods: {
     ...mapMutations(['setLocalConfig']),
     hasHyperlink() {
-      return !!this.node.getData('hyperlink')
+      return this.node ? !!this.node.getData('hyperlink') : false
     },
     hasNote() {
-      return !!this.node.getData('note')
+      return this.node ? !!this.node.getData('note') : false
     },
     numberTypeList() {
       return numberTypeList[this.$i18n.locale] || numberTypeList.zh
@@ -355,34 +400,11 @@ export default {
       return numberLevelList[this.$i18n.locale] || numberLevelList.zh
     },
     hasCheckbox() {
-      return !!this.node.getData('checkbox')
+      return this.node ? !!this.node.getData('checkbox') : false
     },
     hasNodeLink() {
-      return !!this.node.getData('nodeLink')
-    }
-  },
-  created() {
-    this.$bus.$on('node_contextmenu', this.show)
-    this.$bus.$on('node_click', this.hide)
-    this.$bus.$on('draw_click', this.hide)
-    this.$bus.$on('expand_btn_click', this.hide)
-    this.$bus.$on('svg_mousedown', this.onMousedown)
-    this.$bus.$on('mouseup', this.onMouseup)
-    this.$bus.$on('translate', this.hide)
-    this.$bus.$on('node_mousedown', this.onNodeMousedown)
-  },
-  beforeDestroy() {
-    this.$bus.$off('node_contextmenu', this.show)
-    this.$bus.$off('node_click', this.hide)
-    this.$bus.$off('draw_click', this.hide)
-    this.$bus.$off('expand_btn_click', this.hide)
-    this.$bus.$off('svg_mousedown', this.onMousedown)
-    this.$bus.$off('mouseup', this.onMouseup)
-    this.$bus.$off('translate', this.hide)
-    this.$bus.$off('node_mousedown', this.onNodeMousedown)
-  },
-  methods: {
-    ...mapMutations(['setLocalConfig']),
+      return this.node ? !!this.node.getData('nodeLink') : false
+    },
 
     // 计算右键菜单元素的显示位置
     getShowPosition(x, y) {
@@ -593,13 +615,14 @@ export default {
       } catch (error) {
         path = ''
       }
+      const identity = getCurrentMapIdentity()
       this.$bus.$emit('open_review_dialog', {
         uid: node.uid,
         name: text,
         path,
         parentUid,
-        fileId: getCurrentFileId(),
-        fileName: getCurrentFile() ? getCurrentFile().name : ''
+        fileId: identity.fileId,
+        fileName: identity.fileName
       })
       this.hide()
     },
@@ -607,15 +630,38 @@ export default {
     // 标记重点
     toggleFocusNode() {
       if (!this.node || this.isGeneralization) return
+      const identity = getCurrentMapIdentity()
       const nextStatus = toggleFocus(this.node.uid, {
         name: getTextFromHtml(this.node.getData('text')),
         parentUid: this.node.parent && this.node.parent.uid ? this.node.parent.uid : '',
-        fileId: getCurrentFileId(),
-        fileName: getCurrentFile() ? getCurrentFile().name : ''
+        fileId: identity.fileId,
+        fileName: identity.fileName
       })
       this.$bus.$emit('review_data_change')
       this.hide()
       this.$message.success(nextStatus ? '已标记为重点' : '已取消重点')
+    },
+
+    // 快捷复习：直接在右键菜单评价当前节点，复用复习系统的 rateReview 逻辑
+    quickReview(rating) {
+      if (this.isGeneralization || !this.node) {
+        return
+      }
+      const uid = this.node.uid
+      const map = {
+        [RATING.REMEMBER]: '记得',
+        [RATING.FUZZY]: '模糊',
+        [RATING.FORGOT]: '忘了'
+      }
+      const result = rateReview(uid, rating)
+      if (!result) {
+        this.$message.warning('该节点不在复习计划中，请先加入复习')
+        this.hide()
+        return
+      }
+      this.$message.success(`已评价：${map[rating] || rating}，下次复习 ${result.nextReview || '已掌握'}`)
+      this.$bus.$emit('review_data_change')
+      this.hide()
     },
 
     // 管理复习卡片
@@ -724,6 +770,22 @@ export default {
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+    }
+
+    // 快捷复习信息提示行
+    &.quickReviewTip {
+      cursor: default;
+      font-size: 11px;
+      color: #909399;
+      background: #f5f7fa;
+      white-space: normal;
+      height: auto;
+      min-height: 28px;
+      line-height: 1.4;
+      padding: 4px 12px;
+      margin-bottom: 4px;
+      overflow: visible;
+      justify-content: flex-start;
     }
 
     .desc {

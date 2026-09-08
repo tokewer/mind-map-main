@@ -40,6 +40,7 @@
           </div>
         </el-tooltip>
         <ReviewColorToggle></ReviewColorToggle>
+        <ReviewPresetQuick></ReviewPresetQuick>
         <GlowSettings></GlowSettings>
         <div class="toolbarBtn" @click="openDirectory" v-if="!isMobile">
           <span class="icon iconfont icondakai"></span>
@@ -182,6 +183,7 @@ import { getData } from '../../../api'
 import ToolbarNodeBtnList from './ToolbarNodeBtnList.vue'
 import FileBar from './FileBar.vue'
 import ReviewColorToggle from './ReviewColorToggle.vue'
+import ReviewPresetQuick from './ReviewPresetQuick.vue'
 import GlowSettings from './GlowSettings.vue'
 import { throttle, isMobile } from 'simple-mind-map/src/utils/index'
 
@@ -222,6 +224,7 @@ export default {
     ToolbarNodeBtnList,
     FileBar,
     ReviewColorToggle,
+    ReviewPresetQuick,
     GlowSettings
   },
   data() {

@@ -108,7 +108,14 @@ import ShortcutKey from './ShortcutKey.vue'
 import Contextmenu from './Contextmenu.vue'
 import RichTextToolbar from './RichTextToolbar.vue'
 import NodeNoteContentShow from './NodeNoteContentShow.vue'
-import { getData, getConfig, storeData, clearDataCache } from '@/api'
+import {
+  getData,
+  getConfig,
+  storeData,
+  clearDataCache,
+  resetDirectorySnapshotThrottle,
+  resumeDirectoryMode
+} from '@/api'
 import * as directoryStorage from '@/api/directoryStorage'
 import { addToTrash } from '@/review/trash'
 import Navigator from './Navigator.vue'
@@ -124,7 +131,7 @@ import OutlineEdit from './OutlineEdit.vue'
 import { showLoading, hideLoading } from '@/utils/loading'
 import handleClipboardText from '@/utils/handleClipboardText'
 import { getParentWithClass } from '@/utils'
-import { createUid } from 'simple-mind-map/src/utils/index'
+import { createUid, copyRenderTree } from 'simple-mind-map/src/utils/index'
 import Scrollbar from './Scrollbar.vue'
 import exampleData from 'simple-mind-map/example/exampleData'
 import FormulaSidebar from './FormulaSidebar.vue'
@@ -269,6 +276,7 @@ export default {
     window.addEventListener('resize', this.handleResize)
     this.$bus.$on('showDownloadTip', this.showDownloadTip)
     // 工作目录模式：保存状态与错误
+    // 工作目录模式：保存状态与错误
     this.$bus.$on('directory_save_status', this.onDirectorySaveStatus)
     this.$bus.$on('directory_error', this.onDirectoryError)
     window.addEventListener('beforeunload', this.onDirectoryBeforeUnload)
@@ -290,13 +298,13 @@ export default {
     this.$bus.$off('localStorageExceeded', this.onLocalStorageExceeded)
     this.$bus.$off('data_change', this.onDataChange)
     this.$bus.$off('view_data_change', this.onViewDataChange)
-    window.removeEventListener('keydown', this.handleReviewNavigation)
     clearTimeout(this.storeConfigTimer)
     window.removeEventListener('resize', this.handleResize)
     this.$bus.$off('showDownloadTip', this.showDownloadTip)
     this.$bus.$off('directory_save_status', this.onDirectorySaveStatus)
     this.$bus.$off('directory_error', this.onDirectoryError)
     window.removeEventListener('beforeunload', this.onDirectoryBeforeUnload)
+    this.unwatchDirectoryReauth()
     this.mindMap.destroy()
   },
   methods: {
@@ -339,25 +347,71 @@ export default {
     async restoreDirectoryMode() {
       if (window.takeOverApp) return
       try {
-        const res = await directoryStorage.restoreDirectory()
-        if (!res || !res.ok) return
-        this.$store.commit('setIsDirectoryMode', true)
-        this.$store.commit('setDirectoryName', res.name)
-        let targetFile = res.currentFileName
-        if (!targetFile) {
-          const files = await directoryStorage.listMapFiles()
-          targetFile = files && files.length ? files[0] : ''
+        // 静默查询：只读权限检查，不在启动时弹任何授权框
+        const res = await resumeDirectoryMode(false)
+        if (!res) return
+        if (res.ok) {
+          this.applyDirectoryResume(res)
+          return
         }
-        if (targetFile) {
-          const opened = await directoryStorage.openMapFile(targetFile)
-          if (opened && opened.ok) {
-            this.$store.commit('setCurrentSmmFile', opened.fileName)
-            this.$bus.$emit('setData', opened.data)
-          }
+        // 已保存过工作目录但权限待续：等待首次用户手势静默续权（不弹目录选择器）
+        if (res.needReauth || res.reason === 'reauth-error' || res.reason === 'no-handle') {
+          if (res.reason === 'no-handle') return
+          this.watchForDirectoryReauth()
         }
       } catch (error) {
         console.error('恢复工作目录失败', error)
       }
+    },
+
+    // 进入工作目录模式并打开指定导图（权限恢复/选择目录后共用）
+    applyDirectoryResume(res) {
+      if (!res || !res.ok) return
+      this.$store.commit('setIsDirectoryMode', true)
+      this.$store.commit('setDirectoryName', res.name || '')
+      let applied = false
+      if (res.fileName) {
+        this.$store.commit('setCurrentSmmFile', res.fileName)
+      }
+      if (res.data) {
+        clearDataCache()
+        resetDirectorySnapshotThrottle()
+        this.$bus.$emit('setData', res.data)
+        applied = true
+      }
+      return applied
+    },
+
+    // 用户首次点击/按键时，用已保存的目录句柄静默续权并恢复上次导图
+    watchForDirectoryReauth() {
+      if (this._dirReauthBound) return
+      this._dirReauthBound = true
+      const attempt = async () => {
+        this.unwatchDirectoryReauth()
+        if (this.$store.state.isDirectoryMode) return
+        try {
+          const res = await resumeDirectoryMode(true)
+          if (res && res.ok) {
+            this.applyDirectoryResume(res)
+            this.$message.success('已恢复上次的工作目录')
+          }
+        } catch (error) {
+          console.error('恢复工作目录权限失败', error)
+        }
+      }
+      const events = ['pointerdown', 'keydown']
+      events.forEach(ev => window.addEventListener(ev, attempt, { capture: true }))
+      this._dirReauthUnwatch = () => {
+        events.forEach(ev => window.removeEventListener(ev, attempt, { capture: true }))
+      }
+    },
+
+    unwatchDirectoryReauth() {
+      if (this._dirReauthUnwatch) {
+        this._dirReauthUnwatch()
+        this._dirReauthUnwatch = null
+      }
+      this._dirReauthBound = false
     },
 
     handleStartTextEdit() {
@@ -406,8 +460,13 @@ export default {
       this.$bus.$on('view_data_change', this.onViewDataChange)
     },
 
+    // 序列化边界：data_change 事件可能携带与渲染树共享同一对象的引用
+    // （撤销/重做路径 Render.backForward 会把刚解析的对象直接当作 renderTree，
+    // 渲染进程之后会往这些对象上挂载 _node = MindMapNode 运行时引用，形成循环）。
+    // 因此不能把事件载荷按引用直接交给存储层，必须在此先做一次“干净拷贝”，
+    // 确保持久化数据与编辑器运行时对象解耦、始终可 JSON 序列化。
     onDataChange(data) {
-      storeData({ root: data })
+      storeData({ root: data ? copyRenderTree({}, data) : data })
     },
 
     // 捕获节点删除，写入回收站
@@ -470,37 +529,6 @@ export default {
       })
     },
 
-    // 节点同级跳转 (↑↓↔)
-    handleReviewNavigation(e) {
-      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return
-      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
-        const activeList = this.mindMap.renderer.activeNodeList
-        if (activeList.length <= 0) return
-        const node = activeList[0]
-        if (node.isRoot) return
-
-        const parent = node.parent
-        if (!parent) return
-        const siblings = parent.children
-        const index = siblings.findIndex(item => item === node)
-        if (index === -1) return
-
-        let targetIdx = -1
-        if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
-          targetIdx = index - 1
-        } else if (e.key === 'ArrowDown' || e.key === 'ArrowRight') {
-          targetIdx = index + 1
-        }
-
-        if (targetIdx >= 0 && targetIdx < siblings.length) {
-          e.preventDefault()
-          const targetNode = siblings[targetIdx]
-          // 激活节点并居中
-          targetNode.active()
-          this.mindMap.renderer.moveNodeToCenter(targetNode)
-        }
-      }
-    },
     // 初始化
     init() {
       let hasFileURL = this.hasFileURL()
@@ -632,8 +660,6 @@ export default {
       this.mindMap.keyCommand.addShortcut('Shift+Enter', () => {
         this.insertSiblingAbove()
       })
-      // 节点同级跳转 (↑↓↔)
-      window.addEventListener('keydown', this.handleReviewNavigation)
       // 转发事件
       ;[
         'node_active',

@@ -6,6 +6,8 @@
 <script>
 import { mapState } from 'vuex'
 import { getNodeList, todayStr } from '@/review'
+import { isReviewNodeInFile } from '@/review/tree'
+import { getCurrentMapIdentity } from '@/api'
 import {
   getReviewGlowConfig,
   hexToRgb,
@@ -26,7 +28,8 @@ export default {
   },
   computed: {
     ...mapState({
-      localConfig: state => state.localConfig
+      localConfig: state => state.localConfig,
+      isDirectoryMode: state => state.isDirectoryMode
     })
   },
   created() {
@@ -101,7 +104,12 @@ export default {
       if (!root) return
 
       const today = todayStr()
-      const reviewNodes = getNodeList()
+      // 只取当前导图的复习记录：uid 在「另存为/复制文件」后会沿用，
+      // 只按 uid 匹配会把别的文件的复习状态发光到本文件节点上。
+      const currentFileId = getCurrentMapIdentity().fileId
+      const reviewNodes = getNodeList().filter(node =>
+        isReviewNodeInFile(node, currentFileId, this.isDirectoryMode)
+      )
       const focusSet = new Set(
         reviewNodes.filter(node => node.isFocus).map(node => node.uid)
       )

@@ -1,6 +1,6 @@
 import Vue from 'vue'
 import Vuex from 'vuex'
-import { storeLocalConfig } from '@/api'
+import { storeLocalConfig, resetDirectoryMapReady } from '@/api'
 import { DEFAULT_REVIEW_GLOW_CONFIG } from '@/review/glowConfig'
 
 Vue.use(Vuex)
@@ -55,6 +55,9 @@ const store = new Vuex.Store({
     // 设置工作目录模式
     setIsDirectoryMode(state, data) {
       state.isDirectoryMode = data
+      // 进入目录模式即关闭写盘门闩：真实导图（setData）就绪前禁止落盘，
+      // 防止启动/切换阶段的占位或残留内容覆盖本地 data.smm
+      if (data) resetDirectoryMapReady()
     },
 
     // 设置工作目录名

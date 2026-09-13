@@ -436,6 +436,9 @@ export default {
     placeholder: 'Vui lòng nhập cú pháp LaTeX',
     confirm: 'Xác nhận',
     common: 'Công thức phổ biến',
+    search: 'Tìm công thức / mã LaTeX',
+    empty: 'Không có công thức phù hợp',
+    clickToFill: 'Nhấp để điền vào ô nhập',
     tip: 'Không hỗ trợ chèn công thức trong chế độ không phải văn bản phong phú'
   },
   richTextToolbar: {

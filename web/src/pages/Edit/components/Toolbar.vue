@@ -179,7 +179,8 @@ import { mapState } from 'vuex'
 import Vue from 'vue'
 import { Notification } from 'element-ui'
 import exampleData from 'simple-mind-map/example/exampleData'
-import { getData } from '../../../api'
+import { getData, registerLocalFileFlusher } from '../../../api'
+import { setLocalFileHandle } from '../../../api/localFileHandle'
 import ToolbarNodeBtnList from './ToolbarNodeBtnList.vue'
 import FileBar from './FileBar.vue'
 import ReviewColorToggle from './ReviewColorToggle.vue'
@@ -242,7 +243,9 @@ export default {
       fileTreeVisible: false,
       rootDirName: '',
       fileTreeExpand: true,
-      waitingWriteToLocalFile: false
+      waitingWriteToLocalFile: false,
+      // 最近一次待写本地文件的正文（getCurrentData 不可用时的兜底来源）
+      pendingLocalContent: null
     }
   },
   computed: {
@@ -303,6 +306,8 @@ export default {
     this.$bus.$on('write_local_file', this.onWriteLocalFile)
     this.$bus.$on('open_local_file', this.openLocalFile)
     this.$bus.$on('flush_local_file', this.onFlushLocalFile)
+    // 提供给页面隐藏/卸载前的统一落盘入口（可 await 到写入真正完成）
+    registerLocalFileFlusher(() => this.onFlushLocalFile())
   },
   mounted() {
     this.computeToolbarShow()
@@ -316,6 +321,7 @@ export default {
     this.$bus.$off('write_local_file', this.onWriteLocalFile)
     this.$bus.$off('open_local_file', this.openLocalFile)
     this.$bus.$off('flush_local_file', this.onFlushLocalFile)
+    registerLocalFileFlusher(null)
     window.removeEventListener('resize', this.computeToolbarShowThrottle)
     this.$bus.$off('lang_change', this.computeToolbarShowThrottle)
     window.removeEventListener('beforeunload', this.onUnload)
@@ -350,26 +356,43 @@ export default {
       loopCheck()
     },
 
-    // 监听本地文件读写
+    // 监听本地文件读写：编辑后 1s 防抖写入磁盘（页面隐藏/卸载前会由 flushPendingWrites 立即写出）
     onWriteLocalFile(content) {
       clearTimeout(this.timer)
+      this.pendingLocalContent = content
       if (fileHandle && this.isHandleLocalFile) {
         this.waitingWriteToLocalFile = true
       }
       this.timer = setTimeout(() => {
+        this.timer = null
         this.writeLocalFile(content)
       }, 1000)
     },
 
-    // 切换文件前强制立即写出本地磁盘文件（绕过防抖），并等待完成
+    // 切换文件前 / 页面隐藏或刷新前强制立即写出本地磁盘文件（绕过防抖），并等待完成。
+    // 内容一律取编辑器当前真实数据（而非排队时捕获的快照），保证写出的是最新版本。
     async onFlushLocalFile() {
       clearTimeout(this.timer)
-      if (fileHandle && this.isHandleLocalFile) {
-        try {
-          await this.writeLocalFile(Vue.prototype.getCurrentData())
-        } catch (error) {
-          console.log(error)
-        }
+      this.timer = null
+      if (!fileHandle || !this.isHandleLocalFile) {
+        this.waitingWriteToLocalFile = false
+        this.pendingLocalContent = null
+        return
+      }
+      // 没有待写内容（上一轮定时器已写出）时不做无意义的重复写盘：
+      // 该方法现在也会在每次切换标签页时被调用。
+      if (!this.waitingWriteToLocalFile && !this.pendingLocalContent) return
+      const content =
+        (Vue.prototype.getCurrentData && Vue.prototype.getCurrentData()) || this.pendingLocalContent
+      this.pendingLocalContent = null
+      if (!content) {
+        this.waitingWriteToLocalFile = false
+        return
+      }
+      try {
+        await this.writeLocalFile(content)
+      } catch (error) {
+        console.log(error)
       }
     },
 
@@ -436,11 +459,15 @@ export default {
     },
 
     // 编辑指定文件
-    editLocalFile(data) {
-      if (data.handle) {
-        fileHandle = data.handle
-        this.readFile()
-      }
+    async editLocalFile(data) {
+      if (!data.handle) return
+      // 切换本地文件前必须先把当前文件的待写内容落盘：本方法由文件树直接调用，
+      // 不像 FileBar 那样经过 saveBeforeFileChange，不在此处保存会让刚编辑的内容
+      // 随句柄一起被替换掉，之后重新打开就是上一版。
+      await this.onFlushLocalFile()
+      fileHandle = data.handle
+      setLocalFileHandle(fileHandle)
+      this.readFile()
     },
 
     // 导入指定文件
@@ -475,7 +502,10 @@ export default {
         if (!_fileHandle) {
           return
         }
+        // 同 editLocalFile：换文件前先把当前文件的待写内容落盘
+        await this.onFlushLocalFile()
         fileHandle = _fileHandle
+        setLocalFileHandle(fileHandle)
         if (fileHandle.kind === 'directory') {
           this.$message.warning(this.$t('toolbar.selectFileTip'))
           return
@@ -582,6 +612,7 @@ export default {
           background: 'rgba(0, 0, 0, 0.7)'
         })
         fileHandle = _fileHandle
+        setLocalFileHandle(fileHandle)
         this.$store.commit('setIsHandleLocalFile', true)
         this.isFullDataFile = true
         await this.writeLocalFile(content)

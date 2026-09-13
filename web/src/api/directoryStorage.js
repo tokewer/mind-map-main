@@ -338,6 +338,24 @@ const persistImageSource = async (imagesDir, value) => {
   return value
 }
 
+// 新建导图的默认正文：必须含 root。simple-mind-map 的 handleData 对空对象返回 null，
+// 渲染树为空 -> 画布空白、无根节点可编辑，且上层 setData 会读到 undefined 抛异常。
+const createDefaultMapData = () => ({
+  root: {
+    data: { text: '中心主题' },
+    children: []
+  }
+})
+
+// 判断一份导图正文是否可用：必须是含 root 的对象。
+// 旧版本 createMapFile(name, undefined) 会把新建文件写成 {}，这里统一兜底修复。
+const isUsableMapData = data =>
+  !!data &&
+  typeof data === 'object' &&
+  !Array.isArray(data) &&
+  !!data.root &&
+  typeof data.root === 'object'
+
 // 保存前：把导图正文中的 base64/blob 图片外置到该导图的 images/ 并替换为相对路径
 export const extractImagesForMap = async (mapFolder, data) => {
   if (!data || !data.root) return { data, extracted: 0, failed: 0 }
@@ -557,10 +575,12 @@ export const createMapFile = async (name, data) => {
   const dataFile = await getFile(newFolder, DATA_FILE, true)
   const fileName = ensureSmmExt(key)
   try {
-    const source = data || {}
+    // 未提供正文（正常新建）或提供了无 root 的坏数据时，一律落盘一份含根节点的空导图。
+    // 绝不能写成 {}，否则该文件打开后画布空白、无法编辑（见上面 isUsableMapData 说明）。
+    const source = isUsableMapData(data) ? data : createDefaultMapData()
     const { data: outData } = await extractImagesForMap(newFolder, source)
     await enqueueWrite(async () => {
-      await writeText(dataFile, JSON.stringify(outData || {}))
+      await writeText(dataFile, JSON.stringify(isUsableMapData(outData) ? outData : createDefaultMapData()))
     })
     currentFileName = fileName
     await saveWorkspaceMeta({ directoryName, currentFileName: fileName })
@@ -590,7 +610,11 @@ export const openMapFile = async fileName => {
   if (!dataFile) return { ok: false, message: '文件不存在' }
   const data = await readJson(dataFile)
   if (!data) return { ok: false, message: '文件内容不是有效 JSON' }
-  const hydrated = await hydrateImagesForMap(folder, data)
+  // 兼容历史坏文件：旧版新建导图曾写入 {}（无 root），直接交给编辑器会导致
+  // 画布空白并抛异常。这里按“空导图”修复读取，不在此处写盘（避免读操作产生写副作用），
+  // 用户后续任何一次保存都会把修复后的正文正常落盘。
+  const safeData = isUsableMapData(data) ? data : createDefaultMapData()
+  const hydrated = await hydrateImagesForMap(folder, safeData)
   const canonical = ensureSmmExt(key)
   currentFileName = canonical
   await saveWorkspaceMeta({ directoryName, currentFileName: canonical })
@@ -675,9 +699,15 @@ export const saveMapFile = async (fileName, data) => {
       const text = JSON.stringify(outData)
       const dataFile = await getFile(folder, DATA_FILE, true)
       await writeText(dataFile, text)
+      // 只有在保存的正是「当前打开的导图」时才更新身份与 meta。
+      // 保存是异步的（图片外置 + 排队写盘），期间用户可能已切换到别的导图；
+      // 若无条件把 currentFileName 写回刚保存完的那张图，当前身份就会退回到
+      // 上一张图 —— 后续编辑会被写进错误的文件，重启后也会打开错误的导图。
       const canonical = ensureSmmExt(key)
-      currentFileName = canonical
-      await saveWorkspaceMeta({ directoryName, currentFileName: canonical })
+      if (currentFileName === canonical || toMapKey(currentFileName) === key) {
+        currentFileName = canonical
+        await saveWorkspaceMeta({ directoryName, currentFileName: canonical })
+      }
       emitStatus('saved')
       return { ok: true, outData, extracted, failed }
     } catch (error) {

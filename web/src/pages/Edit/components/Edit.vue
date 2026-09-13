@@ -114,7 +114,10 @@ import {
   storeData,
   clearDataCache,
   resetDirectorySnapshotThrottle,
-  resumeDirectoryMode
+  resumeDirectoryMode,
+  markDirectoryMapReady,
+  resetDirectoryMapReady,
+  flushPendingWrites
 } from '@/api'
 import * as directoryStorage from '@/api/directoryStorage'
 import { addToTrash } from '@/review/trash'
@@ -280,6 +283,10 @@ export default {
     this.$bus.$on('directory_save_status', this.onDirectorySaveStatus)
     this.$bus.$on('directory_error', this.onDirectoryError)
     window.addEventListener('beforeunload', this.onDirectoryBeforeUnload)
+    // 页面隐藏（切后台/关闭标签）或刷新前，把各存储模式防抖中的待写数据立即落盘，
+    // 否则定时器随页面一起消失，重开后会读到上一版内容。
+    window.addEventListener('pagehide', this.onFlushBeforeLeave)
+    document.addEventListener('visibilitychange', this.onVisibilityChange)
     this.webTip()
     // 异步恢复上次的工作目录并打开上次文件
     this.restoreDirectoryMode()
@@ -304,6 +311,8 @@ export default {
     this.$bus.$off('directory_save_status', this.onDirectorySaveStatus)
     this.$bus.$off('directory_error', this.onDirectoryError)
     window.removeEventListener('beforeunload', this.onDirectoryBeforeUnload)
+    window.removeEventListener('pagehide', this.onFlushBeforeLeave)
+    document.removeEventListener('visibilitychange', this.onVisibilityChange)
     this.unwatchDirectoryReauth()
     this.mindMap.destroy()
   },
@@ -330,6 +339,15 @@ export default {
         message,
         duration: 4000
       })
+    },
+
+    // 页面隐藏/卸载前：立即写出所有防抖中的待写数据（浏览器存储/本地文件/工作目录）
+    onFlushBeforeLeave() {
+      return flushPendingWrites()
+    },
+
+    onVisibilityChange() {
+      if (document.visibilityState === 'hidden') this.onFlushBeforeLeave()
     },
 
     // 关闭页面前：工作目录模式有未保存数据时提醒
@@ -481,7 +499,14 @@ export default {
 
     onViewDataChange(data) {
       clearTimeout(this.storeConfigTimer)
+      // 记录数据来源的导图身份：300ms 后定时器触发时若已切换文件，
+      // 这次视图变化必须被丢弃，否则会写进新打开的导图。
+      const ownerFileId = this.$store.state.isDirectoryMode
+        ? this.$store.state.currentSmmFile
+        : null
       this.storeConfigTimer = setTimeout(() => {
+        this.storeConfigTimer = null
+        if (ownerFileId && this.$store.state.currentSmmFile !== ownerFileId) return
         storeData({
           view: data
         })
@@ -733,9 +758,21 @@ export default {
     // 动态设置思维导图数据
     setData(data) {
       this.handleShowLoading()
+      // 取消上一张导图排队的「视图变化」写入：该定时器在切换文件后触发，
+      // 会把上一张图的 view 当成当前图的视图写进新文件（视图串台）。
+      clearTimeout(this.storeConfigTimer)
+      this.storeConfigTimer = null
       clearDataCache() // 切换文件/恢复历史时清除内存缓存
+      // 只有真实正文（含 root）就绪才允许目录模式写盘；空对象/坏数据保持门闩关闭，
+      // 否则 setData 后的 manualSave 会把空渲染树写成 root:null 覆盖本地文件。
+      const usable = !!(data && typeof data === 'object' && data.root)
+      if (usable) {
+        markDirectoryMapReady()
+      } else {
+        resetDirectoryMapReady()
+      }
       let rootNodeData = null
-      if (data.root) {
+      if (data && data.root) {
         this.mindMap.setFullData(data)
         rootNodeData = data.root
       } else {
@@ -745,7 +782,7 @@ export default {
       this.mindMap.view.reset()
       this.manualSave()
       // 如果导入的是富文本内容，那么自动开启富文本模式
-      if (rootNodeData.data.richText && !this.openNodeRichText) {
+      if (rootNodeData && rootNodeData.data && rootNodeData.data.richText && !this.openNodeRichText) {
         this.$bus.$emit('toggleOpenNodeRichText', true)
         this.$notify.info({
           title: this.$t('edit.tip'),

@@ -425,6 +425,9 @@ export default {
     placeholder: '请输入 LaTeX 语法',
     confirm: '完成',
     common: '常用公式',
+    search: '搜索公式 / LaTeX 源码',
+    empty: '没有匹配的公式',
+    clickToFill: '点击填入输入框',
     tip: '非富文本模式下不支持插入公式'
   },
   richTextToolbar: {

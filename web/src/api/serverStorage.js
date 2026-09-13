@@ -120,6 +120,16 @@ try {
   // 损坏的内部标记不应阻止应用启动。
 }
 
+// 把磁盘镜像回填进 localStorage。
+//
+// 数据可靠性原则（对应本文件开头的说明）：回填只负责「补齐 localStorage 里没有的键」，
+// 绝不覆盖已存在的本地值。原因是磁盘镜像可能落后于浏览器：
+// 离线会话（server.py 未启动）期间的编辑只写进了 localStorage，磁盘还停在上一版；
+// 若此时让磁盘值覆盖本地值，用户刚做的最新内容就会被旧内容顶掉，
+// 表现为「重新打开后读到老版本数据」。本地值随后会由正常的保存流程写回磁盘。
+//
+// preferDisk 仅用于「离线启动时创建的占位键」清理：磁盘上并不存在这些键时删除它们，
+// 避免刚清理完又冒出占位导图；它不再表示「可以用磁盘覆盖本地」。
 const applyDiskKeys = (keys, preferDisk = false) => {
   const diskKeys = Object.keys(keys)
   diskKeySnapshot = new Set(diskKeys)
@@ -134,12 +144,13 @@ const applyDiskKeys = (keys, preferDisk = false) => {
     diskKeys.forEach(key => {
       if (!isManagedKey(key) || locallyRemoved.has(key)) return
       const localValue = localStorage.getItem(key)
-      if (!preferDisk && key === 'SIMPLE_MIND_MAP_FILE_LIST' && localValue !== null) {
+      if (key === 'SIMPLE_MIND_MAP_FILE_LIST' && localValue !== null) {
+        // 文件清单两侧合并（磁盘与本地各自可能新增过文件），并剔除已删除的
         const removedFileIds = [...locallyRemoved]
           .filter(item => item !== 'SIMPLE_MIND_MAP_FILE_LIST' && item.startsWith('SIMPLE_MIND_MAP_FILE_'))
           .map(item => item.slice('SIMPLE_MIND_MAP_FILE_'.length))
         localStorage.setItem(key, mergeFileLists(keys[key], localValue, removedFileIds))
-      } else if (preferDisk || localValue === null) {
+      } else if (localValue === null) {
         localStorage.setItem(key, keys[key])
       }
     })

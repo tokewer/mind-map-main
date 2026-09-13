@@ -274,7 +274,8 @@ import {
   readFileData,
   clearDataCache,
   getCurrentMapIdentity,
-  readMapDataByIdentity
+  readMapDataByIdentity,
+  isLocalFileIdentity
 } from '@/api'
 import * as directoryStorage from '@/api/directoryStorage'
 import { notifyWorkspaceChanged } from '@/api/workspaceEvents'
@@ -555,6 +556,12 @@ export default {
       const current = getCurrentMapIdentity()
       // 跨文件时先切换数据，等真实树渲染完成后再定位，避免旧树误跳。
       if (item.fileId && item.fileId !== current.fileId) {
+        // 本地磁盘文件（local_ 前缀）没有可供切换的稳定句柄：绝不能拿这个 id 去
+        // setCurrentFileId/readFileData，否则会读不到正文并把画布换成占位内容。
+        if (isLocalFileIdentity(item.fileId)) {
+          this.$message.warning('该节点属于本地磁盘文件，请先用「打开本地文件」打开它')
+          return
+        }
         this.pendingLocate = item
         if (current.isDirectory) {
           // 目录模式：切换到工作目录中的另一张导图

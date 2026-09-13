@@ -15,7 +15,26 @@ import tempfile
 import threading
 from urllib.parse import unquote, urlparse
 
-PORT = 8080
+
+def _resolve_port(default=8080):
+    """默认仍是 8080（原有的「启动思绪思维导图.bat」行为完全不变）。
+    额外允许用命令行数字参数 / --port=xxxx / 环境变量 MINDMAP_PORT 指定端口，
+    这样「学习工具中心」可以在不改变原有点击启动方式的前提下，把它放到 8081。"""
+    import sys
+    for arg in sys.argv[1:]:
+        if arg.isdigit():
+            return int(arg)
+        if arg.startswith('--port='):
+            value = arg.split('=', 1)[1]
+            if value.isdigit():
+                return int(value)
+    env = os.environ.get('MINDMAP_PORT')
+    if env and env.isdigit():
+        return int(env)
+    return default
+
+
+PORT = _resolve_port()
 ROOT = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(ROOT, 'data')
 STORE_DIR = os.path.join(DATA_DIR, 'store')

@@ -33,6 +33,19 @@ export const toDirectorySubjectList = (list, isDirectoryMode = false) => {
   return (list || []).map(n => toDirectorySubjectNode(n))
 }
 
+// 判断一条复习记录是否属于「当前打开的这张导图」。
+// 必须用 fileId 归属（而非只比 uid）：uid 在「另存为 / 复制文件」后会被沿用，
+// 只按 uid 匹配会把 A 文件的复习状态（发光、掌握度上色）画到 B 文件上——即跨文件串台。
+// 兼容旧数据：任一方缺 fileId（早期记录未打归属）时退化为按 uid 匹配，避免漏显示。
+export const isReviewNodeInFile = (node, currentFileId, isDirectoryMode = false) => {
+  if (!node) return false
+  const normalized = isDirectoryMode ? toDirectorySubjectNode(node) : node
+  const recordId = normalized && normalized.fileId ? normalized.fileId : ''
+  const currentId = currentFileId || ''
+  if (!recordId || !currentId) return true
+  return recordId === currentId
+}
+
 // 从持久化导图数据建立 childUid -> parentUid 映射。
 export const buildParentMap = data => {
   const result = {}

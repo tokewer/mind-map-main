@@ -21,6 +21,8 @@
 <script>
 import { mapState } from 'vuex'
 import { getNodeList, todayStr } from '@/review'
+import { isReviewNodeInFile } from '@/review/tree'
+import { getCurrentMapIdentity } from '@/api'
 import { getMasteryColors } from './MasteryColorSettings.vue'
 
 export default {
@@ -34,7 +36,8 @@ export default {
   },
   computed: {
     ...mapState({
-      isDark: state => state.localConfig.isDark
+      isDark: state => state.localConfig.isDark,
+      isDirectoryMode: state => state.isDirectoryMode
     })
   },
   created() {
@@ -76,8 +79,11 @@ export default {
       const mindMap = this.getMindMap()
       if (!mindMap || !mindMap.renderer || !mindMap.renderer.root) return
       if (!this.masteryColors) this.masteryColors = getMasteryColors()
+      // 只认当前导图的复习记录，避免 uid 复用时把别的文件的掌握度颜色画到本文件
+      const currentFileId = getCurrentMapIdentity().fileId
       const nodeMap = {}
       getNodeList().forEach(node => {
+        if (!isReviewNodeInFile(node, currentFileId, this.isDirectoryMode)) return
         nodeMap[node.uid] = node
       })
       const today = todayStr()

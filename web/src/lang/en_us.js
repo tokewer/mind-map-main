@@ -438,6 +438,9 @@ export default {
     placeholder: 'Please enter LaTeX syntax',
     confirm: 'Confirm',
     common: 'Common formulas',
+    search: 'Search formula / LaTeX source',
+    empty: 'No matching formula',
+    clickToFill: 'Click to fill the input',
     tip: 'Inserting formulas is not supported in non rich text mode'
   },
   richTextToolbar: {

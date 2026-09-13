@@ -6,6 +6,7 @@ import { notifyWorkspaceChanged } from './workspaceEvents'
 import { scheduleWorkspaceAutoSave } from './workspace'
 import { syncFromDiskOnce, markBootstrapKey, markKeyRemoved } from './serverStorage'
 import * as directoryStorage from './directoryStorage'
+import { getLocalFileHandle, getLocalFileName } from './localFileHandle'
 
 const SIMPLE_MIND_MAP_DATA = 'SIMPLE_MIND_MAP_DATA' // 旧版单文件 key，仅用于首次迁移
 const SIMPLE_MIND_MAP_CONFIG = 'SIMPLE_MIND_MAP_CONFIG'
@@ -135,12 +136,57 @@ export const getFileById = id => {
   return getFileList().find(f => f.id === id) || null
 }
 
+// 本地磁盘文件的归属前缀：'local_<文件名>'。与浏览器 fileId（'file_xxx'）天然不冲突，
+// 且同名文件重开后归属稳定，复习记录不会因为句柄变化而变成孤儿记录。
+const LOCAL_FILE_ID_PREFIX = 'local_'
+let localFileSessionId = ''
+
+const getLocalFileIdentityId = () => {
+  const name = getLocalFileName()
+  if (name) return LOCAL_FILE_ID_PREFIX + name
+  if (!localFileSessionId) {
+    localFileSessionId =
+      LOCAL_FILE_ID_PREFIX + 'session_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7)
+  }
+  return localFileSessionId
+}
+
+export const isLocalFileIdentity = id => typeof id === 'string' && id.startsWith(LOCAL_FILE_ID_PREFIX)
+
+// 按本地磁盘文件身份读取正文（仅当句柄仍是该文件时才可读，否则返回 null 由调用方跳过）。
+const readLocalFileDataByIdentity = async identity => {
+  const handle = getLocalFileHandle()
+  if (!handle) return null
+  const name = identity && identity.fileName ? identity.fileName : ''
+  const target = getLocalFileIdentityId()
+  const wanted = identity && identity.fileId ? identity.fileId : ''
+  if (wanted && wanted !== target && wanted !== LOCAL_FILE_ID_PREFIX + handle.name) return null
+  if (name && handle.name && name.replace(/\.smm$/i, '') !== handle.name.replace(/\.smm$/i, '')) return null
+  try {
+    const file = await handle.getFile()
+    const text = await file.text()
+    return JSON.parse(text)
+  } catch (e) {
+    return null
+  }
+}
+
 // 当前“导图”的统一身份：目录模式下用 .smm 文件名，浏览器模式下用 fileId。
 // 复习记录、重点标记、历史等所有与导图挂钩的元数据都应使用该身份，避免两种模式混用。
 export const getCurrentMapIdentity = () => {
   if (vuexStore.state.isDirectoryMode) {
     const name = directoryStorage.getCurrentFileName() || ''
     return { fileId: name, fileName: name.replace(/\.smm$/i, ''), isDirectory: true }
+  }
+  // 本地磁盘文件（另存为/打开 .smm）不是浏览器内置文件：若继续沿用当前浏览器
+  // fileId，复习记录会被错误地记为浏览器文件的归属，导致复习状态串到别的文件上。
+  // 用本会话唯一 id 在归属上与其他文件隔离；文件名仅用于更好展示分组。
+  if (vuexStore.state.isHandleLocalFile) {
+    return {
+      fileId: getLocalFileIdentityId(),
+      fileName: getLocalFileName(),
+      isDirectory: false
+    }
   }
   return { fileId: getCurrentFileId(), fileName: getCurrentFile() ? getCurrentFile().name : '', isDirectory: false }
 }
@@ -151,6 +197,11 @@ export const getCurrentMapIdentity = () => {
 export const readMapDataByIdentity = async identity => {
   const fileId = identity && (identity.fileId || identity)
   if (!fileId) return null
+  // 本地磁盘文件身份优先判定：其 id 形如 local_<文件名>.smm，以 .smm 结尾，
+  // 若先走下面的目录分支会被误当作工作目录中的导图去读，故必须先分流。
+  if (isLocalFileIdentity(fileId)) {
+    return readLocalFileDataByIdentity(identity)
+  }
   const isDir =
     (identity && identity.isDirectory) ||
     (vuexStore.state.isDirectoryMode &&
@@ -272,6 +323,11 @@ export const deleteFile = id => {
 }
 
 export const readFileData = id => {
+  // 优先返回「内存中更新」的版本：编辑后的 500ms 节流窗口内，localStorage 里仍是
+  // 上一版内容，直接读盘会让调用方（复习页/文件栏/历史）拿到旧数据。
+  // 数据以 uid 为界，缓存与待写任务都只对同一文件 ID 生效，不会串到别的文件。
+  if (dataCache && dataCacheFileId === id) return dataCache
+  if (pendingTask && pendingTask.fileId === id) return pendingTask.data
   const store = localStorage.getItem(getFileKey(id))
   if (store === null) return simpleDeepClone(exampleData)
   try {
@@ -463,12 +519,24 @@ export const storeData = (data, immediate = false) => {
     // 工作目录模式：唯一权威数据源是本地 .smm，只更新内存缓存 + 防抖写盘。
     // 不写 localStorage、不触发 write_local_file、不调度 server.py 双写。
     if (vuexStore.state.isDirectoryMode) {
+      // 真实导图未就绪：占位/残留内容只进内存缓存，绝不写盘（见 directoryMapReady）
+      if (!directoryMapReady) {
+        dataCache = originData
+        dataCacheFileId = 'directory'
+        return
+      }
       dataCache = originData
       dataCacheFileId = 'directory'
       if (immediate) {
+        // 立即写：清掉防抖定时器，但「必须保留其他文件的待写数据」——
+        // 直接丢弃会让刚编辑过的上一张图永远停在老版本。
         clearTimeout(directorySaveTimer)
-        directoryPendingData = originData
-        directoryFlushSave()
+        directorySaveTimer = null
+        const fileName = directoryStorage.getCurrentFileName()
+        if (fileName) {
+          directoryPendingSaves.set(fileName, originData)
+          directoryFlushSave()
+        }
       } else {
         directoryScheduleSave(originData)
       }
@@ -531,6 +599,36 @@ const isQuotaExceeded = error => {
   )
 }
 
+// 本地磁盘文件（Toolbar 持句柄）的“立即写出”实现，由 Toolbar 注册。
+// 返回 Promise，使页面隐藏/卸载前可以真正等到写入完成。
+let localFileFlusher = null
+export const registerLocalFileFlusher = fn => {
+  localFileFlusher = typeof fn === 'function' ? fn : null
+}
+
+// 把所有尚未落盘的待写数据立即写出，覆盖当前所处的任何一种存储模式。
+//
+// 为什么必须有它：三种模式都带防抖（浏览器 500ms / 本地文件 1s / 工作目录 800ms），
+// 用户在防抖窗口内刷新或关闭页面时，定时器随页面一起消失，磁盘里留下的就是上一版内容
+// —— 这就是「重新打开后读到老版本数据」的直接原因。页面隐藏/卸载前调用它即可消除该窗口。
+export const flushPendingWrites = async () => {
+  try {
+    if (window.takeOverApp) return
+    if (vuexStore.state.isDirectoryMode) {
+      await flushDirectoryStore()
+      return
+    }
+    if (vuexStore.state.isHandleLocalFile) {
+      // 本地磁盘文件的实际写入在 Toolbar 中（持有文件句柄），由它注册可 await 的写出函数
+      if (localFileFlusher) await localFileFlusher()
+      return
+    }
+    flushStore()
+  } catch (error) {
+    console.log(error)
+  }
+}
+
 // 立即把节流中的待写数据落盘（用于切换文件/关闭前）。
 // 数据与最初的文件 ID 绑定，不会因切换而写到新文件。
 export const flushStore = () => {
@@ -552,27 +650,40 @@ export const flushStore = () => {
 // ---------- 工作目录模式：防抖自动保存 ----------
 // 与 localStorage 的 storageTimer 隔离，避免互相干扰。
 
+// 目录模式写盘门闩：真实导图（openMapFile→setData）就绪前禁止落盘，
+// 防止启动/切换阶段的示例占位或浏览器残留内容覆盖本地 data.smm。
+let directoryMapReady = false
+export const markDirectoryMapReady = () => {
+  directoryMapReady = true
+}
+export const resetDirectoryMapReady = () => {
+  directoryMapReady = false
+}
+
 const DIRECTORY_SAVE_DELAY = 800
 // 目录模式自动历史快照节流（每张导图 60s 内最多一份）
 const DIRECTORY_AUTO_SNAPSHOT_INTERVAL = 60000
 let directorySaveTimer = null
-let directoryPendingData = null
-let directorySaving = false
-let directorySaveAgain = false
+// 待写队列：文件名 -> 该文件最新待写正文。
+//
+// 必须按文件分别保存，不能只留「一份待写数据 + 一个定时器」：
+//   1. 编辑 A 后立即切到 B，A 的待写数据若被 B 的写入覆盖/清掉，切回 A 就会读到老版本；
+//   2. 落盘时若临时去读「当前文件名」，排队期间切过图就会把 A 的内容写进 B。
+// 同名文件反复编辑只会保留最新一份（天然合并防抖）。
+const directoryPendingSaves = new Map()
+// 串行化落盘，且让 await 调用方真正等到本轮写完
+let directoryFlushChain = Promise.resolve()
 let directoryLastSnapshotTime = {}
 
-const directoryFlushSave = async () => {
-  if (directorySaving) {
-    directorySaveAgain = true
-    return
-  }
-  const data = directoryPendingData
-  if (!data) return
-  directoryPendingData = null
-  directorySaving = true
-  try {
-    const fileName = directoryStorage.getCurrentFileName()
-    if (fileName) {
+const doDirectoryFlush = async () => {
+  if (!directoryPendingSaves.size) return
+  const entries = [...directoryPendingSaves.entries()]
+  for (const [fileName, data] of entries) {
+    // 本轮开始后若该文件又有更新版本入队，跳过旧的，交给下一轮写最新
+    const latest = directoryPendingSaves.get(fileName)
+    if (latest !== undefined && latest !== data) continue
+    directoryPendingSaves.delete(fileName)
+    try {
       // 注意：saveMapFile 内部深拷贝后再外置图片，不会污染内存中的水合数据。
       // 内存缓存保持 blob URL / base64 的渲染版本，落盘版本才是相对路径。
       const res = await directoryStorage.saveMapFile(fileName, data)
@@ -580,19 +691,17 @@ const directoryFlushSave = async () => {
       if (res && res.ok && res.outData) {
         autoDirectorySnapshot(fileName, res.outData)
       }
-    }
-  } catch (error) {
-    // 失败：保留本次数据，等待下一次变更自动重试；状态已在 adapter 中置 error
-    if (directoryPendingData === null) {
-      directoryPendingData = data
-    }
-  } finally {
-    directorySaving = false
-    if (directorySaveAgain) {
-      directorySaveAgain = false
-      directoryFlushSave()
+    } catch (error) {
+      // 失败：放回队列等待下一次变更重试（不覆盖其间产生的更新版本）；
+      // 状态已在 adapter 中置 error。
+      if (!directoryPendingSaves.has(fileName)) directoryPendingSaves.set(fileName, data)
     }
   }
+}
+
+const directoryFlushSave = () => {
+  directoryFlushChain = directoryFlushChain.then(doDirectoryFlush).catch(() => {})
+  return directoryFlushChain
 }
 
 // 目录模式自动快照：节流 + 静默失败（不打扰用户编辑）
@@ -612,7 +721,10 @@ export const resetDirectorySnapshotThrottle = () => {
 }
 
 const directoryScheduleSave = data => {
-  directoryPendingData = data
+  // 入队即锁定目标文件名，避免排队期间切换导图导致写错文件
+  const fileName = directoryStorage.getCurrentFileName()
+  if (!fileName) return
+  directoryPendingSaves.set(fileName, data)
   clearTimeout(directorySaveTimer)
   directorySaveTimer = setTimeout(() => {
     directorySaveTimer = null
@@ -625,6 +737,9 @@ export const flushDirectoryStore = async () => {
   clearTimeout(directorySaveTimer)
   directorySaveTimer = null
   await directoryFlushSave()
+  // 落盘过程中可能又有新的变更入队（保存是异步的），再收一轮，确保调用方
+  // await 返回时确实没有残留待写数据。
+  if (directoryPendingSaves.size) await directoryFlushSave()
 }
 
 // ---------- 工作目录模式：历史版本（以文件形式存在每张导图 history/ 下） ----------

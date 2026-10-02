@@ -13,7 +13,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/wanglin2/mind-map"
+    "url": "https://github.com/tokewer/mind-map-main"
   },
   "scripts": {
     "lint": "eslint src/",
@@ -43,11 +43,8 @@
     "javascript",
     "svg",
     "mind-map",
-    "mindMap",
-    "MindMap"
-  ],
-  "devDependencies": {
-    "eslint": "^8.25.0",
-    "prettier": "^2.7.1"
-  }
+    "mindmap",
+    "web",
+    "xmind"
+  ]
 }

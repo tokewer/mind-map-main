@@ -70,22 +70,8 @@ const mindMap = new MindMap({
 });
 ```
 
-You will get a mind map. Want to implement more features? Check the [Development Documentation](https://wanglin2.github.io/mind-map-docs/).
+You will get a mind map.
 
 # License
 
-[MIT](./LICENSE). Commercial use is permitted freely as long as the `simple-mind-map` copyright notice and attribution are retained. If you have questions or wish to remove these requirements, please contact the author (WeChat: wanglinguanfang) for a paid option to remove them.
-
-> Example: You can add the following content on any page of your application, such as the About page, Help page, Documentation page, Open Source Notice, etc.:
->
-> The mind map feature of this product is developed based on the SimpleMindMap project. The copyright belongs to the original project. [Open Source License](https://github.com/wanglin2/mind-map/blob/main/LICENSE).
-
-# Development Help / Technical Support / Consulting
-
-Due to limited time and a shift in focus, we currently do not provide any development support (including paid support). Thank you for your understanding!
-
-# Star
-
-If you like this project, welcome to give it a star. It means a lot to us.
-
-[![Star History Chart](https://api.star-history.com/svg?repos=wanglin2/mind-map&type=Date)](https://star-history.com/#wanglin2/mind-map&Date)
+This project is licensed under the [MIT License](./LICENSE). The core mind mapping engine is based on `simple-mind-map` (copyright belongs to the original team). Review features and adaptations are maintained by this project. See [NOTICE.md](./NOTICE.md) for third-party notices.

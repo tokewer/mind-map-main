@@ -10,3 +10,5 @@ dist_backup/
 data/
 __pycache__/
 server.log
+_site/
+*.bak

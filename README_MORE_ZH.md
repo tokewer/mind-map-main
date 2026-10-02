@@ -71,29 +71,11 @@ const mindMap = new MindMap({
 });
 ```
 
-即可得到一个思维导图。想要实现更多功能？可以查看[开发文档](https://wanglin2.github.io/mind-map-docs/)。
+即可得到一个思维导图。
 
 # License
 
-[MIT](./LICENSE)。保留`simple-mind-map`版权声明和注明来源的情况下可随意商用，如有疑问或不想保留可联系作者（微信：wanglinguanfang）通过付费的方式去除。
-
-> 示例：可以在你应用中的关于页面、帮助页面、文档页面、开源声明等任何页面添加以下内容：
->
-> 本产品思维导图基于SimpleMindMap项目开发，版权归源项目所有，[开源协议](https://github.com/wanglin2/mind-map/blob/main/LICENSE)。
-
-# 开发帮助/技术支持/咨询等
-
-因精力有限，及重心转变，暂不提供任何开发支持（包括有偿），请见谅！
-
-# star
-
-如果喜欢本项目，欢迎点个 star，这对我们很重要。
-
-[![Star History Chart](https://api.star-history.com/svg?repos=wanglin2/mind-map&type=Date)](https://star-history.com/#wanglin2/mind-map&Date)
-
-# 关于定制
-
-如果你有个性化的商用定制需求，可以联系我们，我们提供付费开发服务，无论前端、后端、还是部署，都可以帮你一站式搞定。
+本项目遵循 [MIT](./LICENSE) 协议开源。思维导图底层渲染引擎基于 `simple-mind-map`（版权归原作者所有），复习功能及系统由本项目维护。第三方开源许可声明详见 [NOTICE.md](./NOTICE.md)。
 
 # 谁在使用
 

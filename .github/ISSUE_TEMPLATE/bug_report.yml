@@ -1,0 +1,34 @@
+name: Bug 报告 (Bug Report)
+description: 提交复习思维导图的缺陷或异常问题
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈问题！请尽量提供清晰的复现步骤。
+  - type: textarea
+    id: description
+    attributes:
+      label: 问题描述
+      description: 请清晰简洁地描述遇到的问题
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: 复现步骤
+      description: 请详细描述重现该问题的步骤
+      placeholder: |
+        1. 打开导图...
+        2. 点击某个节点...
+        3. 发生错误...
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: 运行环境
+      description: 浏览器名称及版本，运行模式（静态网页 / 本地 server.py）
+      placeholder: 如 Chrome 128 / 本地 Python 启动
+    validations:
+      required: false

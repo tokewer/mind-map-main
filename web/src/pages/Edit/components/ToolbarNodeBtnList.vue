@@ -157,6 +157,17 @@
         <span class="text">{{ $t('toolbar.formula') }}</span>
       </div>
       <div
+        v-if="item === 'table'"
+        class="toolbarBtn"
+        :class="{
+          disabled: activeNodes.length <= 0 || hasGeneralization
+        }"
+        @click="$bus.$emit('showNodeTable')"
+      >
+        <span class="icon el-icon-s-grid" style="font-size: 18px;"></span>
+        <span class="text">{{ $t('toolbar.table') || '表格' }}</span>
+      </div>
+      <div
         v-if="item === 'attachment'"
         class="toolbarBtn"
         :class="{

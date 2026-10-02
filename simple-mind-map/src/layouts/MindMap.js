@@ -84,6 +84,9 @@ class MindMap extends Base {
         let leftChildrenAreaHeight = 0
         let rightChildrenAreaHeight = 0
         cur._node.children.forEach(item => {
+          if (isRoot && item.hasCustomPosition()) {
+            return
+          }
           if (item.dir === CONSTANTS.LAYOUT_GROW_DIR.LEFT) {
             leftLen++
             leftChildrenAreaHeight += item.height
@@ -131,6 +134,9 @@ class MindMap extends Base {
           let leftTotalTop = baseTop - node.leftChildrenAreaHeight / 2
           let rightTotalTop = baseTop - node.rightChildrenAreaHeight / 2
           node.children.forEach(cur => {
+            if (node.isRoot && cur.hasCustomPosition()) {
+              return
+            }
             if (cur.dir === CONSTANTS.LAYOUT_GROW_DIR.LEFT) {
               cur.top = leftTotalTop
               leftTotalTop += cur.height + marginY

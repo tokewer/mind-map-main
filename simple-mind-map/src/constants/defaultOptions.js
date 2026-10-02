@@ -94,7 +94,7 @@ export const defaultOpt = {
   // 是否在点击了画布外的区域时结束节点文本的编辑状态
   isEndNodeTextEditOnClickOuter: true,
   // 最大历史记录数
-  maxHistoryCount: 500,
+  maxHistoryCount: 50,
   // 是否一直显示节点的展开收起按钮，默认为鼠标移上去和激活时才显示
   alwaysShowExpandBtn: false,
   // 不显示展开收起按钮，优先级比alwaysShowExpandBtn配置高
@@ -113,7 +113,7 @@ export const defaultOpt = {
     // }
   ],
   // 节点最大缓存数量
-  maxNodeCacheCount: 1000,
+  maxNodeCacheCount: 10000,
   // 思维导图适应画布大小时的内边距
   fitPadding: 50,
   // 是否开启按住ctrl键多选节点功能
@@ -239,11 +239,11 @@ export const defaultOpt = {
   // 如果不传，默认会以新窗口的方式打开超链接，可以传递一个函数，函数接收两个参数：link（超链接的url）、node（所属节点实例），只要传递了函数，就会阻止默认的跳转
   customHyperlinkJump: null,
   // 是否开启性能模式，默认情况下所有节点都会直接渲染，无论是否处于画布可视区域，这样当节点数量比较多时（1000+）会比较卡，如果你的数据量比较大，那么可以通过该配置开启性能模式，即只渲染画布可视区域内的节点，超出的节点不渲染，这样会大幅提高渲染速度，当然同时也会带来一些其他问题，比如：1.当拖动或是缩放画布时会实时计算并渲染未节点的节点，所以会带来一定卡顿；2.导出图片、svg、pdf时需要先渲染全部节点，所以会比较慢；3.其他目前未发现的问题
-  openPerformance: false,
+  openPerformance: true,
   // 性能优化模式配置
   performanceConfig: {
-    time: 250, // 当视图改变后多久刷新一次节点，单位：ms，
-    padding: 100, // 超出画布四周指定范围内依旧渲染节点
+    time: 200, // 当视图改变后多久刷新一次节点，单位：ms，
+    padding: 200, // 超出画布四周指定范围内依旧渲染节点
     removeNodeWhenOutCanvas: true // 节点移除画布可视区域后从画布删除
   },
   // 如果节点文本为空，那么为了避免空白节点高度塌陷，会用该字段指定的文本测量一个高度
@@ -333,6 +333,14 @@ export const defaultOpt = {
   // 【Drag插件】
   // 是否开启节点自由拖拽
   enableFreeDrag: false,
+  // 是否允许长距离拖拽脱离为自由节点
+  enableDragToDetach: true,
+  // 拖拽脱离为自由节点的位移距离阈值（像素）
+  dragDetachDistance: 120,
+  // 拖拽吸附靠近目标节点的判定距离阈值（像素）
+  dragSnapDistance: 48,
+  // 拖拽吸附的迟滞退出距离阈值（像素）
+  dragHysteresisDistance: 65,
   // 拖拽节点时鼠标移动到画布边缘是否开启画布自动移动
   autoMoveWhenMouseInEdgeOnDrag: true,
   // 拖拽多个节点时随鼠标移动的示意矩形的样式配置

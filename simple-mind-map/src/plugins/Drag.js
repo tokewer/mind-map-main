@@ -59,6 +59,11 @@ class Drag extends Base {
     // 鼠标移动的距离距鼠标按下的位置距离多少以上才认为是拖动事件
     this.checkDragOffset = 10
     this.minOffset = 10
+    // 是否判定为脱离为自由节点
+    this.isDetachToFree = false
+    // 迟滞吸附状态跟踪
+    this.lastSnapTarget = null
+    this.lastSnapIntent = null
   }
 
   //  绑定事件
@@ -66,7 +71,7 @@ class Drag extends Base {
     this.onNodeMousedown = this.onNodeMousedown.bind(this)
     this.onMousemove = this.onMousemove.bind(this)
     this.onMouseup = this.onMouseup.bind(this)
-    this.checkOverlapNode = throttle(this.checkOverlapNode, 300, this)
+    this.checkOverlapNode = throttle(this.checkOverlapNode, 30, this)
 
     this.mindMap.on('node_mousedown', this.onNodeMousedown)
     this.mindMap.on('mousemove', this.onMousemove)
@@ -181,6 +186,29 @@ class Drag extends Base {
         'INSERT_BEFORE',
         this.beingDragNodeList,
         this.nextNode
+      )
+    } else if (
+      this.clone &&
+      (this.isDetachToFree ||
+        (this.mindMap.opt.enableDragToDetach !== false &&
+          Math.hypot(
+            this.mouseMoveX - this.mouseDownX,
+            this.mouseMoveY - this.mouseDownY
+          ) >= (this.mindMap.opt.dragDetachDistance || 120)))
+    ) {
+      // 满足长距离脱离阈值且未吸附于任何节点，脱离为独立自由节点（保留全部子树）
+      let { x, y } = this.mindMap.toPos(
+        e.clientX - this.offsetX,
+        e.clientY - this.offsetY
+      )
+      let { scaleX, scaleY, translateX, translateY } = this.drawTransform
+      x = (x - translateX) / scaleX
+      y = (y - translateY) / scaleY
+      this.mindMap.execCommand(
+        'DETACH_TO_FREE_NODE',
+        this.beingDragNodeList,
+        x,
+        y
       )
     } else if (
       this.clone &&
@@ -393,6 +421,25 @@ class Drag extends Base {
     this.placeHolderExtraLines = []
   }
 
+  // 获取节点的吸附/迟滞距离阈值
+  getSnapThreshold(node) {
+    const isLastTarget =
+      this.lastSnapTarget &&
+      (this.lastSnapTarget.uid === node.uid ||
+        (this.lastSnapTarget.getData &&
+          node.getData &&
+          this.lastSnapTarget.getData('uid') === node.getData('uid')))
+    const snapDistance =
+      this.mindMap.opt.dragSnapDistance !== undefined
+        ? this.mindMap.opt.dragSnapDistance
+        : 48
+    const hysteresisDistance =
+      this.mindMap.opt.dragHysteresisDistance !== undefined
+        ? this.mindMap.opt.dragHysteresisDistance
+        : 65
+    return isLastTarget ? hysteresisDistance : snapDistance
+  }
+
   //  检测重叠节点
   checkOverlapNode() {
     if (!this.drawTransform || !this.placeholder) {
@@ -462,6 +509,32 @@ class Drag extends Base {
           this.handleLogicalStructure(node)
       }
     })
+
+    if (this.overlapNode || this.prevNode || this.nextNode) {
+      this.isDetachToFree = false
+      this.lastSnapTarget = this.overlapNode || this.prevNode || this.nextNode
+      this.lastSnapIntent = this.overlapNode
+        ? 'child'
+        : this.prevNode
+        ? 'prev'
+        : 'next'
+    } else {
+      this.lastSnapTarget = null
+      this.lastSnapIntent = null
+      const moveDist = Math.hypot(
+        this.mouseMoveX - this.mouseDownX,
+        this.mouseMoveY - this.mouseDownY
+      )
+      if (
+        this.mindMap.opt.enableDragToDetach !== false &&
+        moveDist >= (this.mindMap.opt.dragDetachDistance || 120)
+      ) {
+        this.isDetachToFree = true
+      } else {
+        this.isDetachToFree = false
+      }
+    }
+
     // 重叠节点，也就是添加为子节点
     if (this.overlapNode) {
       this.handleOverlapNode()
@@ -778,10 +851,18 @@ class Drag extends Base {
     if (isReverse) {
       checkList = checkList.reverse()
     }
-    let oneFourthHeight = nodeRect.originHeight / 4
+    // 计算边缘同级插入判定区间（兼顾比例与最小像素阈值缓冲）
+    const { scaleY: currentScaleY = 1 } = this.drawTransform || {}
+    const minVerticalBuffer = Math.min(14 * currentScaleY, nodeRect.height * 0.45)
+    let siblingCheckHeight = Math.max(nodeRect.originHeight * (1 / 3) * currentScaleY, minVerticalBuffer)
     let { prevBrotherOffset, nextBrotherOffset } =
       this.getNodeDistanceToSiblingNode(checkList, node, nodeRect, 'v')
-    if (nodeRect.left <= mouseMoveX && nodeRect.right >= mouseMoveX) {
+    const snapThreshold =
+      this.getSnapThreshold(node) * ((this.drawTransform && this.drawTransform.scaleX) || 1)
+    if (
+      nodeRect.left - snapThreshold <= mouseMoveX &&
+      nodeRect.right + snapThreshold >= mouseMoveX
+    ) {
       // 检测兄弟节点位置
       if (
         !this.overlapNode &&
@@ -793,14 +874,14 @@ class Drag extends Base {
           nextBrotherOffset > 0 // 距离下一个兄弟节点的距离大于0
             ? mouseMoveY > nodeRect.bottom &&
               mouseMoveY <= nodeRect.bottom + nextBrotherOffset // 那么在当前节点外底部判断
-            : mouseMoveY >= nodeRect.bottom - oneFourthHeight &&
-              mouseMoveY <= nodeRect.bottom // 否则在当前节点内底部1/4区间判断
+            : mouseMoveY >= nodeRect.bottom - siblingCheckHeight &&
+              mouseMoveY <= nodeRect.bottom // 否则在当前节点内底部区间判断
         let checkIsNextNode =
           prevBrotherOffset > 0 // 距离上一个兄弟节点的距离大于0
             ? mouseMoveY < nodeRect.top &&
-              mouseMoveY >= nodeRect.top - prevBrotherOffset // 那么在当前节点外底部判断
+              mouseMoveY >= nodeRect.top - prevBrotherOffset // 那么在当前节点外顶部判断
             : mouseMoveY >= nodeRect.top &&
-              mouseMoveY <= nodeRect.top + oneFourthHeight
+              mouseMoveY <= nodeRect.top + siblingCheckHeight
 
         const { scaleY } = this.drawTransform
         let x =
@@ -898,7 +979,7 @@ class Drag extends Base {
         dir: 'v',
         prevBrotherOffset,
         nextBrotherOffset,
-        size: oneFourthHeight,
+        size: siblingCheckHeight,
         pos: mouseMoveY,
         nodeRect
       })
@@ -920,10 +1001,18 @@ class Drag extends Base {
     let mouseMoveX = this.mouseMoveX
     let mouseMoveY = this.mouseMoveY
     let nodeRect = this.getNodeRect(node)
-    let oneFourthWidth = nodeRect.originWidth / 4
+    // 计算边缘同级插入判定区间（兼顾比例与最小像素阈值缓冲）
+    const { scaleX: currentScaleX = 1 } = this.drawTransform || {}
+    const minHorizontalBuffer = Math.min(14 * currentScaleX, nodeRect.width * 0.45)
+    let siblingCheckWidth = Math.max(nodeRect.originWidth * (1 / 3) * currentScaleX, minHorizontalBuffer)
     let { prevBrotherOffset, nextBrotherOffset } =
       this.getNodeDistanceToSiblingNode(checkList, node, nodeRect, 'h')
-    if (nodeRect.top <= mouseMoveY && nodeRect.bottom >= mouseMoveY) {
+    const snapThreshold =
+      this.getSnapThreshold(node) * ((this.drawTransform && this.drawTransform.scaleY) || 1)
+    if (
+      nodeRect.top - snapThreshold <= mouseMoveY &&
+      nodeRect.bottom + snapThreshold >= mouseMoveY
+    ) {
       // 检测兄弟节点位置
       if (
         !this.overlapNode &&
@@ -936,12 +1025,12 @@ class Drag extends Base {
             ? mouseMoveX < nodeRect.right + nextBrotherOffset &&
               mouseMoveX >= nodeRect.right // 那么在当前节点外底部判断
             : mouseMoveX <= nodeRect.right &&
-              mouseMoveX >= nodeRect.right - oneFourthWidth // 否则在当前节点内底部1/4区间判断
+              mouseMoveX >= nodeRect.right - siblingCheckWidth // 否则在当前节点内底部区间判断
         let checkIsNextNode =
           prevBrotherOffset > 0 // 距离上一个兄弟节点的距离大于0
             ? mouseMoveX > nodeRect.left - prevBrotherOffset &&
               mouseMoveX <= nodeRect.left // 那么在当前节点外底部判断
-            : mouseMoveX <= nodeRect.left + oneFourthWidth &&
+            : mouseMoveX <= nodeRect.left + siblingCheckWidth &&
               mouseMoveX >= nodeRect.left
         const { scaleX } = this.drawTransform
         const layerIndex = node.layerIndex
@@ -1008,7 +1097,7 @@ class Drag extends Base {
         dir: 'h',
         prevBrotherOffset,
         nextBrotherOffset,
-        size: oneFourthWidth,
+        size: siblingCheckWidth,
         pos: mouseMoveX,
         nodeRect
       })

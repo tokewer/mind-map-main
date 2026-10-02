@@ -331,6 +331,7 @@ export default {
     associativeLine: '关联线',
     painter: '格式刷',
     formula: '公式',
+    table: '表格',
     attachment: '附件',
     outerFrame: '外框',
     more: '更多',
@@ -504,7 +505,7 @@ export default {
     connectFailedTitle: '客户端连接失败提示',
     connectFailedTip: '客户端连接失败，请检查：',
     connectFailedCheckTip1:
-      '1.是否安装了思绪思维导图客户端，如果没有请点此安装：',
+      '1.是否安装了思维导图客户端，如果没有请点此安装：',
     connectFailedCheckTip2: '2.如果安装了客户端，请确认是否打开了客户端。',
     connectFailedCheckTip3:
       '3.如果已经安装并启动了，那么可以尝试关闭然后重新启动。',
@@ -527,7 +528,7 @@ export default {
     configTip: '目前仅支持火山方舟大模型，需要自行去获取key，详细操作步骤见：',
     course: '教程',
     inferenceAccessPoint: '推理接入点',
-    mindMappingClientConfiguration: '思绪思维导图客户端配置：',
+    mindMappingClientConfiguration: '思维导图客户端配置：',
     port: '端口',
     cancel: '取消',
     confirm: '确认',

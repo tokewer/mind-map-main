@@ -336,6 +336,7 @@ export default {
     associativeLine: 'Associative line',
     painter: 'Painter',
     formula: 'Formula',
+    table: 'Table',
     attachment: 'Attachment',
     outerFrame: 'Outer frame',
     more: 'More',

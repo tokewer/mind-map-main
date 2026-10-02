@@ -1,4 +1,4 @@
-﻿# 思绪思维导图 - 一键启动器
+# 复习思维导图 - 一键启动器
 #
 # 行为：
 #   1. 如果「学习工具中心」管理器正在运行 —— 交给它启动并打开，
@@ -34,7 +34,7 @@ function Test-ManagerRunning {
 
 Write-Host ""
 Write-Host "======================================" -ForegroundColor Cyan
-Write-Host "       思绪思维导图 - 启动中" -ForegroundColor Cyan
+Write-Host "       复习思维导图 - 启动中" -ForegroundColor Cyan
 Write-Host "======================================" -ForegroundColor Cyan
 
 # ---------- 首选：交给「学习工具中心」 ----------

@@ -11,11 +11,11 @@
       <div class="tipBox">
         <p>{{ $t('ai.connectFailedTip') }}</p>
         <p>
-          {{ $t('ai.connectFailedCheckTip1')
-          }}<a
-            href="https://pan.baidu.com/s/1huasEbKsGNH2Af68dvWiOg?pwd=3bp3"
-            >{{ $t('ai.baiduNetdisk') }}</a
-          >、<a href="https://github.com/wanglin2/mind-map/releases">Github</a>
+          {{ $t('ai.connectFailedCheckTip1') }}<a
+            href="https://github.com/tokewer/mind-map-main/releases"
+            target="_blank"
+            >GitHub Releases</a
+          >
         </p>
         <p>{{ $t('ai.connectFailedCheckTip2') }}</p>
         <P>{{ $t('ai.connectFailedCheckTip3') }}</P>

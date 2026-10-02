@@ -506,8 +506,11 @@ export default {
       this.dueCount = this.dueList.length
       this.loadParentMaps()
     },
+    startOverlayWatch() {},
+    stopOverlayWatch() {},
     // 目录模式下异步读取各导图文件用于分组（不生成 blob URL，仅需 uid 结构）
     loadParentMaps() {
+      if (this._loadingParentMaps) return
       const current = getCurrentMapIdentity()
       const fileIds = new Set()
       ;[...this.dueList, ...this.allList].forEach(item => {
@@ -518,6 +521,7 @@ export default {
         id => !Object.prototype.hasOwnProperty.call(this.parentMapCache, id)
       )
       if (targets.length === 0) return
+      this._loadingParentMaps = true
       Promise.all(
         targets.map(async id => {
           const isDir =
@@ -540,7 +544,8 @@ export default {
             }
           }
         })
-      ).then(() => {
+      ).finally(() => {
+        this._loadingParentMaps = false
         // 触发 computed 重新计算
         this.$forceUpdate()
       })

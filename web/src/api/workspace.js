@@ -5,7 +5,7 @@ import { validateWorkspaceStorage } from './workspaceValidation'
 
 const WORKSPACE_TYPE = 'mind-map-workspace'
 const WORKSPACE_VERSION = 1
-const WORKSPACE_FILE_NAME = '思绪思维导图工作区.smmw.json'
+const WORKSPACE_FILE_NAME = '思维导图工作区.smmw.json'
 const EXACT_KEYS = [
   'SIMPLE_MIND_MAP_FILE_LIST',
   'SIMPLE_MIND_MAP_CURRENT_FILE',
@@ -90,7 +90,7 @@ export const validateWorkspace = value => {
     return { ok: false, message: '工作区文件不是有效 JSON' }
   }
   if (!data || data.type !== WORKSPACE_TYPE) {
-    return { ok: false, message: '文件类型不是思绪思维导图工作区' }
+    return { ok: false, message: '文件类型不是思维导图工作区' }
   }
   if (data.version !== WORKSPACE_VERSION) {
     return { ok: false, message: `工作区版本不兼容：${data.version || '未知'}` }
@@ -187,7 +187,7 @@ export const saveWorkspaceFile = async (reuseHandle = true) => {
     }
     handle = await window.showSaveFilePicker({
       suggestedName: WORKSPACE_FILE_NAME,
-      types: [{ description: '思绪思维导图工作区', accept: { 'application/json': ['.smmw.json', '.json'] } }]
+      types: [{ description: '思维导图工作区', accept: { 'application/json': ['.smmw.json', '.json'] } }]
     })
   }
   await writeHandle(handle, exportWorkspace())
@@ -205,7 +205,7 @@ export const openWorkspaceFile = async file => {
     }
     const handles = await window.showOpenFilePicker({
       multiple: false,
-      types: [{ description: '思绪思维导图工作区', accept: { 'application/json': ['.smmw.json', '.json'] } }]
+      types: [{ description: '思维导图工作区', accept: { 'application/json': ['.smmw.json', '.json'] } }]
     })
     if (!handles.length) return { ok: false, cancelled: true }
     handle = handles[0]

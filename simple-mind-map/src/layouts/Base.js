@@ -664,6 +664,16 @@ class Base {
 
   // 设置连线样式
   setLineStyle(style, line, path, childNode) {
+    if (
+      childNode &&
+      childNode.parent &&
+      childNode.parent.isRoot &&
+      childNode.hasCustomPosition()
+    ) {
+      line.plot('')
+      line.hide()
+      return
+    }
     line.plot(this.transformPath(path))
     style && style(line, childNode, true)
   }

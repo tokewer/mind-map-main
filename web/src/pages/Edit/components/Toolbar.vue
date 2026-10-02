@@ -205,6 +205,7 @@ const defaultBtnList = [
   'summary',
   'associativeLine',
   'formula',
+  'table',
   // 'attachment',
   'outerFrame',
   'annotation',

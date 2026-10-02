@@ -134,6 +134,12 @@
         <span class="icon iconfont iconqingchu"></span>
       </div>
     </el-tooltip>
+
+    <el-tooltip content="插入/编辑表格" placement="top">
+      <div class="btn" @click="openTableDialog">
+        <span class="el-icon-s-grid" style="font-size: 18px;"></span>
+      </div>
+    </el-tooltip>
   </div>
 </template>
 
@@ -261,6 +267,10 @@ export default {
 
     removeFormat() {
       this.mindMap.richText.removeFormat()
+    },
+
+    openTableDialog() {
+      this.$bus.$emit('showNodeTable')
     }
   }
 }

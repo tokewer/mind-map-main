@@ -308,6 +308,9 @@ const getMapImagesDir = async (mapFolder, create = false) => {
 // 从给定 imagesDir 读取图片为 blob URL，并建立 url<->path 双向映射
 const readImageAsUrl = async (imagesDir, relPath) => {
   if (!imagesDir) return ''
+  if (pathToUrlMap.has(relPath)) {
+    return pathToUrlMap.get(relPath)
+  }
   const fileName = relPath.slice(IMAGES_DIR.length + 1)
   const fileHandle = await getFile(imagesDir, fileName, false)
   if (!fileHandle) return ''

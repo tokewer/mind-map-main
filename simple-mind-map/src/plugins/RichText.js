@@ -113,6 +113,38 @@ class RichText {
       .smm-richtext-node-wrap .ql-align-center {
         text-align: center;
       }
+
+      .smm-richtext-node-wrap table,
+      .ql-editor table,
+      .smm-node-table {
+        border-collapse: collapse;
+        border-spacing: 0;
+        margin: 6px 0;
+        width: 100%;
+        box-sizing: border-box;
+      }
+
+      .smm-richtext-node-wrap table td,
+      .smm-richtext-node-wrap table th,
+      .ql-editor table td,
+      .ql-editor table th,
+      .smm-node-table td,
+      .smm-node-table th {
+        border: 1px solid #dcdfe6;
+        padding: 4px 8px;
+        min-width: 32px;
+        min-height: 22px;
+        text-align: left;
+        box-sizing: border-box;
+        word-break: break-word;
+      }
+
+      .smm-richtext-node-wrap table th,
+      .ql-editor table th,
+      .smm-node-table th {
+        background-color: rgba(0, 0, 0, 0.05);
+        font-weight: bold;
+      }
       `
     )
     let cssText = `
@@ -407,6 +439,7 @@ class RichText {
     this.quill = new Quill(this.textEditNode, {
       modules: {
         toolbar: false,
+        table: true,
         keyboard: {
           bindings: {
             enter: {
@@ -470,8 +503,13 @@ class RichText {
         'font',
         'size',
         'formula',
-        'align'
-      ], // 明确指定允许的格式，不包含有序列表，无序列表等
+        'align',
+        'table',
+        'table-cell-line',
+        'table-row',
+        'table-body',
+        'table-container'
+      ], // 明确指定允许的格式，包含表格相关格式
       theme: 'snow'
     })
     // 拦截复制事件，即Ctrl + c，去除多余的空行

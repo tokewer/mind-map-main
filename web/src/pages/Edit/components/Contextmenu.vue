@@ -105,6 +105,9 @@
       <div class="item" @click="exec('EXPORT_CUR_NODE_TO_PNG')">
         <span class="name">{{ $t('contextmenu.exportNodeToPng') }}</span>
       </div>
+      <div class="item" @click="openTableDialog">
+        <span class="name">📊 {{ hasTable() ? '编辑表格' : '插入表格' }}</span>
+      </div>
       <div class="splitLine"></div>
       <div
         class="item focus"
@@ -404,6 +407,16 @@ export default {
     },
     hasNodeLink() {
       return this.node ? !!this.node.getData('nodeLink') : false
+    },
+    hasTable() {
+      if (!this.node) return false
+      const text = String(this.node.getData('text') || '')
+      return /<table[\s>]/i.test(text)
+    },
+    openTableDialog() {
+      const node = this.node
+      this.hide()
+      this.$bus.$emit('showNodeTable', node)
     },
 
     // 计算右键菜单元素的显示位置

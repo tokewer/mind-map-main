@@ -104,17 +104,13 @@
             <span class="iconfont iconAIshengcheng"></span>
             {{ $t('navigatorToolbar.ai') }}
           </el-dropdown-item>
-          <el-dropdown-item command="client">
-            <span class="iconfont iconxiazai"></span>
-            {{ $t('navigatorToolbar.downloadClient') }}
-          </el-dropdown-item>
           <el-dropdown-item command="github">
             <span class="iconfont icongithub"></span>
             Github
           </el-dropdown-item>
-          <el-dropdown-item command="site">
-            <span class="iconfont iconwangzhan"></span>
-            {{ $t('navigatorToolbar.site') }}
+          <el-dropdown-item command="issue">
+            <span class="el-icon-chat-dot-round"></span>
+            {{ $t('navigatorToolbar.issue') || '反馈建议' }}
           </el-dropdown-item>
           <el-dropdown-item disabled
             >{{ $t('navigatorToolbar.current') }}v{{
@@ -213,27 +209,15 @@ export default {
       let url = ''
       switch (command) {
         case 'github':
-          url = 'https://github.com/wanglin2/mind-map'
-          break
-        case 'helpDoc':
-          url = 'https://wanglin2.github.io/mind-map-docs/help/help1.html'
-          break
-        case 'devDoc':
-          url =
-            'https://wanglin2.github.io/mind-map-docs/start/introduction.html'
-          break
-        case 'site':
-          url = 'https://sxmind.cn/'
+          url = 'https://github.com/tokewer/mind-map-main'
           break
         case 'issue':
-          url = 'https://github.com/wanglin2/mind-map/issues/new'
-          break
-        case 'client':
-          url = 'https://sxmind.cn/'
+          url = 'https://github.com/tokewer/mind-map-main/issues/new'
           break
         default:
           break
       }
+      if (!url) return
       const a = document.createElement('a')
       a.href = url
       a.target = '_blank'

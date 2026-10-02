@@ -59,6 +59,7 @@
     <CardManagerDialog></CardManagerDialog>
     <TrashDialog></TrashDialog>
     <HistoryDialog></HistoryDialog>
+    <NodeTableDialog v-if="mindMap" :mindMap="mindMap"></NodeTableDialog>
     <div
       class="dragMask"
       v-if="showDragMask"
@@ -153,6 +154,7 @@ import ReviewDialog from './ReviewDialog.vue'
 import CardManagerDialog from './CardManagerDialog.vue'
 import TrashDialog from './TrashDialog.vue'
 import HistoryDialog from './HistoryDialog.vue'
+import NodeTableDialog from './NodeTableDialog.vue'
 
 // 注册插件
 MindMap.usePlugin(MiniMap)
@@ -219,7 +221,8 @@ export default {
     ReviewDialog,
     CardManagerDialog,
     TrashDialog,
-    HistoryDialog
+    HistoryDialog,
+    NodeTableDialog
   },
   data() {
     return {
@@ -404,7 +407,26 @@ export default {
     watchForDirectoryReauth() {
       if (this._dirReauthBound) return
       this._dirReauthBound = true
-      const attempt = async () => {
+      const attempt = async e => {
+        // 关键防护：过滤 Alt、Tab、Control、Shift、Meta 等系统修饰键与切换键，防止切后台触发权限弹窗死锁
+        if (e && e.type === 'keydown') {
+          const ignoreKeys = [
+            'Alt',
+            'Tab',
+            'Control',
+            'Shift',
+            'Meta',
+            'CapsLock',
+            'Escape'
+          ]
+          if (ignoreKeys.includes(e.key) || e.altKey || e.metaKey) {
+            return
+          }
+        }
+        // 如果当前页面正处于不可见状态或切后台中，绝不请求权限
+        if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
+          return
+        }
         this.unwatchDirectoryReauth()
         if (this.$store.state.isDirectoryMode) return
         try {
@@ -589,7 +611,7 @@ export default {
             // this.$bus.$emit('hideNoteContent')
           }
         },
-        openRealtimeRenderOnNodeTextEdit: true,
+        openRealtimeRenderOnNodeTextEdit: false,
         enableAutoEnterTextEditWhenKeydown: true,
         demonstrateConfig: {
           openBlankMode: false
@@ -966,6 +988,51 @@ export default {
     top: 0px;
     width: 100%;
     height: 100%;
+  }
+}
+</style>
+
+<style lang="less">
+.smm-node-table,
+.smm-richtext-node-wrap table,
+.ql-editor table {
+  border-collapse: collapse !important;
+  border-spacing: 0 !important;
+  margin: 6px 0;
+  width: auto;
+  min-width: 80px;
+  box-sizing: border-box;
+
+  td,
+  th {
+    border: 1px solid #dcdfe6 !important;
+    padding: 4px 8px !important;
+    min-width: 32px;
+    min-height: 22px;
+    line-height: 1.4;
+    text-align: left;
+    box-sizing: border-box;
+    word-break: break-word;
+  }
+
+  th {
+    background-color: rgba(0, 0, 0, 0.05);
+    font-weight: bold;
+  }
+}
+
+.isDark {
+  .smm-node-table,
+  .smm-richtext-node-wrap table,
+  .ql-editor table {
+    td,
+    th {
+      border-color: #555860 !important;
+    }
+
+    th {
+      background-color: rgba(255, 255, 255, 0.08);
+    }
   }
 }
 </style>

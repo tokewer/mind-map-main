@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# 思绪思维导图 - 本地服务器（静态托管 + 本地文件夹存储 API）
+# 复习思维导图 - 本地服务器（静态托管 + 本地文件夹存储 API）
 # 数据以本地文件夹为主：data/store/ 存键值（导图文件、复习记录、历史、设置等），
 # data/images/ 存节点图片。浏览器 localStorage 仅作快速缓存，可被清空而不丢数据。
 # 用 launcher.ps1 调用：python server.py
@@ -401,6 +401,33 @@ class GzipHandler(http.server.SimpleHTTPRequestHandler):
                 pass
 
 
+def _trim_memory():
+    """空闲时回收 Python 垃圾并修剪 Windows 进程工作集"""
+    import gc
+    try:
+        gc.collect()
+    except Exception:
+        pass
+    try:
+        import ctypes
+        k32 = ctypes.windll.kernel32
+        psapi = ctypes.windll.psapi
+        h = k32.GetCurrentProcess()
+        if hasattr(psapi, 'EmptyWorkingSet') and psapi.EmptyWorkingSet(h):
+            return
+        size_minus_one = ctypes.c_size_t(-1).value
+        k32.SetProcessWorkingSetSize(h, size_minus_one, size_minus_one)
+    except Exception:
+        pass
+
+
+def _idle_maintenance_loop():
+    import time
+    while True:
+        time.sleep(30)
+        _trim_memory()
+
+
 class ThreadingHTTPServer(socketserver.ThreadingTCPServer):
     allow_reuse_address = True
     daemon_threads = True
@@ -408,8 +435,10 @@ class ThreadingHTTPServer(socketserver.ThreadingTCPServer):
 
 if __name__ == '__main__':
     ensure_dirs()
-    print('思绪思维导图已启动: http://127.0.0.1:{}'.format(PORT))
+    print('复习思维导图已启动: http://127.0.0.1:{}'.format(PORT))
     print('数据存储目录: {}'.format(DATA_DIR))
+    threading.Thread(target=_idle_maintenance_loop, daemon=True).start()
+    _trim_memory()
     with ThreadingHTTPServer(('127.0.0.1', PORT), GzipHandler) as httpd:
         try:
             httpd.serve_forever()

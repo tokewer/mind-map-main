@@ -61,9 +61,14 @@ class LogicalStructure extends Base {
       },
       (cur, parent, isRoot, layerIndex) => {
         // 返回时计算节点的areaHeight，也就是子节点所占的高度之和，包括外边距
-        let len = cur.data.expand === false ? 0 : cur._node.children.length
+        // 若为根节点，需排除自由节点（拥有独立绝对坐标），防止挤压主树正常子节点排版
+        let normalChildren = cur._node.children
+        if (isRoot) {
+          normalChildren = normalChildren.filter(item => !item.hasCustomPosition())
+        }
+        let len = cur.data.expand === false ? 0 : normalChildren.length
         cur._node.childrenAreaHeight = len
-          ? cur._node.children.reduce((h, item) => {
+          ? normalChildren.reduce((h, item) => {
               return h + item.height
             }, 0) +
             (len + 1) * this.getMarginY(layerIndex + 1)
@@ -95,6 +100,9 @@ class LogicalStructure extends Base {
           let top = node.top + node.height / 2 - node.childrenAreaHeight / 2
           let totalTop = top + marginY
           node.children.forEach(cur => {
+            if (node.isRoot && cur.hasCustomPosition()) {
+              return
+            }
             cur.top = totalTop
             totalTop += cur.height + marginY
           })

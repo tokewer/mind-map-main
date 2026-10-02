@@ -745,9 +745,14 @@ class MindMapNode {
     this.group.show()
     this.showGeneralization()
     if (this.parent) {
+      const isFreeNode = this.parent.isRoot && this.hasCustomPosition()
       const index = this.parent.children.indexOf(this)
-      this.parent._lines[index] && this.parent._lines[index].show()
-      this._lines.forEach(item => {
+      if (!isFreeNode && this.parent._lines[index]) {
+        this.parent._lines[index].show()
+      }
+      this._lines.forEach((item, idx) => {
+        const child = this.children && this.children[idx]
+        if (this.isRoot && child && child.hasCustomPosition()) return
         item.show()
       })
     }
@@ -764,7 +769,9 @@ class MindMapNode {
   setOpacity(val) {
     // 自身及连线
     if (this.group) this.group.opacity(val)
-    this._lines.forEach(line => {
+    this._lines.forEach((line, idx) => {
+      const child = this.children && this.children[idx]
+      if (this.isRoot && child && child.hasCustomPosition()) return
       line.opacity(val)
     })
     // 子节点
@@ -789,7 +796,9 @@ class MindMapNode {
 
   // 显示子节点
   showChildren() {
-    this._lines.forEach(item => {
+    this._lines.forEach((item, idx) => {
+      const child = this.children && this.children[idx]
+      if (this.isRoot && child && child.hasCustomPosition()) return
       item.show()
     })
     if (this.children && this.children.length) {

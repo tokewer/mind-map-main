@@ -35,7 +35,9 @@ import {
   throttle,
   debounce,
   checkClipboardReadEnable,
-  isNodeNotNeedRenderData
+  isNodeNotNeedRenderData,
+  transformTreeDataToObject,
+  isSameObject
 } from '../../utils'
 import { shapeList } from './node/Shape'
 import { lineStyleProps } from '../../theme/default'
@@ -283,6 +285,9 @@ class Render {
     this.mindMap.command.add('INSERT_BEFORE', this.insertBefore)
     this.moveNodeTo = this.moveNodeTo.bind(this)
     this.mindMap.command.add('MOVE_NODE_TO', this.moveNodeTo)
+    // 拖拽节点脱离为独立自由节点
+    this.detachToFreeNode = this.detachToFreeNode.bind(this)
+    this.mindMap.command.add('DETACH_TO_FREE_NODE', this.detachToFreeNode)
     // 删除节点
     this.removeNode = this.removeNode.bind(this)
     this.mindMap.command.add('REMOVE_NODE', this.removeNode)
@@ -502,6 +507,16 @@ class Render {
   // 清空节点缓存池
   clearCache() {
     this.layout.lru.clear()
+    Object.keys(this.nodeCache).forEach(uid => {
+      if (this.nodeCache[uid]) {
+        this.nodeCache[uid].destroy()
+      }
+    })
+    Object.keys(this.lastNodeCache).forEach(uid => {
+      if (this.lastNodeCache[uid]) {
+        this.lastNodeCache[uid].destroy()
+      }
+    })
     this.nodeCache = {}
     this.lastNodeCache = {}
   }
@@ -587,14 +602,15 @@ class Render {
     // 计算布局
     this.root = null
     this.layout.doLayout(root => {
-      // 删除本次渲染时不再需要的节点
+      // 删除本次渲染时不再需要的节点（包括重新创建的新节点替换旧实例时的旧节点销毁，防止SVG内存泄漏）
       Object.keys(this.lastNodeCache).forEach(uid => {
-        if (!this.nodeCache[uid]) {
+        const lastNode = this.lastNodeCache[uid]
+        if (!this.nodeCache[uid] || this.nodeCache[uid] !== lastNode) {
           // 从激活节点列表里删除
-          this.removeNodeFromActiveList(this.lastNodeCache[uid])
+          this.removeNodeFromActiveList(lastNode)
           this.emitNodeActiveEvent()
           // 调用节点的销毁方法
-          this.lastNodeCache[uid].destroy()
+          lastNode.destroy()
         }
       })
       // 更新根节点
@@ -743,11 +759,108 @@ class Render {
 
   // 前进回退
   backForward(type, step) {
+    const activeNode = this.activeNodeList[0]
+    const activeUid = activeNode ? activeNode.getData('uid') : null
+    const lastDataStr =
+      this.mindMap.command.history[this.mindMap.command.activeHistoryIndex]
+
     this.mindMap.execCommand('CLEAR_ACTIVE_NODE')
     const data = this.mindMap.command[type](step)
     if (data) {
       this.renderTree = data
-      this.mindMap.render()
+      let targetUid = null
+      try {
+        const nextDataStr =
+          this.mindMap.command.history[this.mindMap.command.activeHistoryIndex]
+        if (lastDataStr && nextDataStr) {
+          const lastData = JSON.parse(lastDataStr)
+          const nextData = JSON.parse(nextDataStr)
+          const lastObj = transformTreeDataToObject(lastData)
+          const nextObj = transformTreeDataToObject(nextData)
+
+          // 1. 查找撤销/重做后新出现或恢复的节点（如撤销删除、重做创建）
+          for (const uid of Object.keys(nextObj)) {
+            if (!lastObj[uid]) {
+              targetUid = uid
+              break
+            }
+          }
+
+          // 2. 查找撤销/重做后被移除的节点（如撤销创建、重做删除）
+          if (!targetUid) {
+            for (const uid of Object.keys(lastObj)) {
+              if (!nextObj[uid]) {
+                let parentUid = null
+                let siblingUid = null
+                for (const pUid of Object.keys(lastObj)) {
+                  const p = lastObj[pUid]
+                  if (
+                    p.children &&
+                    p.children.some(c =>
+                      typeof c === 'string' ? c === uid : c.data && c.data.uid === uid
+                    )
+                  ) {
+                    parentUid = pUid
+                    const idx = p.children.findIndex(c =>
+                      typeof c === 'string' ? c === uid : c.data && c.data.uid === uid
+                    )
+                    if (idx > 0) {
+                      const prev = p.children[idx - 1]
+                      siblingUid =
+                        typeof prev === 'string' ? prev : prev.data && prev.data.uid
+                    } else if (idx < p.children.length - 1) {
+                      const next = p.children[idx + 1]
+                      siblingUid =
+                        typeof next === 'string' ? next : next.data && next.data.uid
+                    }
+                    break
+                  }
+                }
+                if (siblingUid && nextObj[siblingUid]) {
+                  targetUid = siblingUid
+                } else if (parentUid && nextObj[parentUid]) {
+                  targetUid = parentUid
+                }
+                break
+              }
+            }
+          }
+
+          // 3. 查找内容发生变化的节点（如撤销文本编辑、修改样式等）
+          if (!targetUid) {
+            for (const uid of Object.keys(nextObj)) {
+              if (
+                lastObj[uid] &&
+                !isSameObject(lastObj[uid].data, nextObj[uid].data)
+              ) {
+                targetUid = uid
+                break
+              }
+            }
+          }
+        }
+      } catch (e) {
+        console.error('计算回退激活节点异常:', e)
+      }
+
+      if (!targetUid && activeUid) {
+        targetUid = activeUid
+      }
+
+      this.mindMap.render(() => {
+        let nodeToActive = null
+        if (targetUid) {
+          nodeToActive = this.findNodeByUid(targetUid)
+        }
+        if (!nodeToActive) {
+          nodeToActive = this.root
+        }
+        if (nodeToActive) {
+          this.clearActiveNodeList()
+          this.addNodeToActiveList(nodeToActive)
+          this.emitNodeActiveEvent(nodeToActive)
+        }
+      })
     }
     this.mindMap.emit('data_change', data)
   }
@@ -1403,6 +1516,13 @@ class Render {
       if (dir === 'after') {
         existIndex++
       }
+      // 若原为自由节点，吸附重组后清除自定义坐标回归流式排版
+      item.setData({
+        customLeft: undefined,
+        customTop: undefined
+      })
+      item.customLeft = undefined
+      item.customTop = undefined
       existBorthers.splice(existIndex, 0, item)
       existParent.nodeData.children.splice(existIndex, 0, item.nodeData)
     })
@@ -1573,13 +1693,32 @@ class Render {
     const copyData = nodeList.map(node => {
       return copyNodeTree({}, node, true)
     })
+    // 按照删除节点的逻辑计算剪切后应当激活的下一个节点
+    let needActiveNode = this.getNextActiveNode(nodeList)
+    if (!needActiveNode && nodeList.length > 0 && nodeList[0].parent) {
+      needActiveNode = nodeList[0].parent
+    }
+    const needActiveUid = needActiveNode ? needActiveNode.getData('uid') : null
+
     // 从父节点的数据中移除
     nodeList.forEach(node => {
       removeFromParentNodeData(node)
     })
     // 清空激活节点列表
-    this.clearActiveNodeList()
-    this.mindMap.render()
+    // 激活被剪切节点的相邻兄弟节点或父节点
+    if (needActiveNode) {
+      this.addNodeToActiveList(needActiveNode)
+    }
+    this.emitNodeActiveEvent(needActiveNode || null)
+    this.mindMap.render(() => {
+      if (needActiveUid && this.activeNodeList.length === 0) {
+        const target = this.findNodeByUid(needActiveUid) || this.root
+        if (target) {
+          this.addNodeToActiveList(target)
+          this.emitNodeActiveEvent(target)
+        }
+      }
+    })
     if (callback && typeof callback === 'function') {
       callback(copyData)
     }
@@ -1594,11 +1733,64 @@ class Render {
     nodeList.forEach(item => {
       this.removeNodeFromActiveList(item)
       removeFromParentNodeData(item)
+      // 若原为自由节点，吸附重组后清除自定义坐标回归流式排版
+      item.setData({
+        customLeft: undefined,
+        customTop: undefined
+      })
+      item.customLeft = undefined
+      item.customTop = undefined
       toNode.setData({
         expand: true
       })
       toNode.nodeData.children.push(item.nodeData)
     })
+    this.emitNodeActiveEvent()
+    this.mindMap.render()
+  }
+
+  // 节点脱离为顶层独立自由节点
+  detachToFreeNode(node, left, top) {
+    let nodeList = formatDataToArray(node)
+    nodeList = nodeList.filter(item => {
+      return !item.isRoot
+    })
+    if (nodeList.length <= 0) return
+    const rootNode = this.root
+    if (!rootNode) return
+
+    nodeList.forEach((item, index) => {
+      this.removeNodeFromActiveList(item)
+      // 从原父节点中安全剥离
+      removeFromParentNodeData(item)
+
+      // 若已经直接在根节点下，先从根的children中移除以防重复
+      if (item.parent && item.parent.isRoot) {
+        const idx = rootNode.nodeData.children.findIndex(
+          c => c.data.uid === item.uid
+        )
+        if (idx !== -1) {
+          rootNode.nodeData.children.splice(idx, 1)
+        }
+      }
+
+      // 计算自由坐标：支持多选时横向或纵向微偏移，单节点直接赋值
+      const customLeft = left !== undefined ? left + index * 20 : item.left
+      const customTop = top !== undefined ? top + index * 20 : item.top
+
+      // 赋予自由绝对坐标，保留全部子树
+      item.setData({
+        customLeft,
+        customTop,
+        expand: true
+      })
+      item.customLeft = customLeft
+      item.customTop = customTop
+
+      // 挂载到根节点子列表
+      rootNode.nodeData.children.push(item.nodeData)
+    })
+
     this.emitNodeActiveEvent()
     this.mindMap.render()
   }

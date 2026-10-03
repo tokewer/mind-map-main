@@ -39,9 +39,9 @@
 
 ## 🖼️ 界面预览
 
-![思维导图界面](./assets/client/client1.png)
+![思维导图界面](./assets/preview.png)
 
-![导图节点与编辑](./assets/client/client3.png)
+![艾宾浩斯复习中心](./assets/review.png)
 
 ---
 

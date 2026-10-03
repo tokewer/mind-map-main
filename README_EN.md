@@ -24,7 +24,13 @@ A modern web mind map application focusing on **knowledge organization and Ebbin
 4. **Dual Execution Modes**:
    - **Static Mode (GitHub Pages)**: Runs completely in-browser with zero backend requirement using `localStorage`.
    - **Local Mode (Python Server)**: Built-in `server.py` persists files and images to disk automatically.
-5. **Workspace Backup**: Full workspace export and import via `.smmw.json` for cross-device migration.
+---
+
+## 🖼️ UI Preview
+
+![Mind Map Editor](./assets/preview.png)
+
+![Ebbinghaus Review Center](./assets/review.png)
 
 ---
 

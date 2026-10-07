@@ -15,6 +15,10 @@ export const createFakeFs = (opts = {}) => {
     },
     // 直接写入（模拟用户/外部程序改动磁盘，或初始文件内容）
     seed(path, content) {
+      const parts = String(path).split('/')
+      for (let i = 1; i < parts.length; i++) {
+        dirs.add(parts.slice(0, i).join('/'))
+      }
       files.set(path, content)
     },
     read(path) {

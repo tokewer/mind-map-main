@@ -367,6 +367,65 @@
           ></el-slider>
         </div>
       </div>
+
+      <!-- GitHub 云端自动同步 -->
+      <div class="title">☁️ GitHub 云端同步</div>
+      <div class="row">
+        <div class="rowItem">
+          <el-checkbox
+            v-model="githubConfig.enabled"
+            @change="saveGitHubConfig"
+          >开启保存时自动同步至 GitHub</el-checkbox>
+        </div>
+      </div>
+      <div class="row">
+        <div class="rowItem" style="width: 100%;">
+          <span class="name" style="width: 70px;">Token</span>
+          <el-input
+            v-model="githubConfig.token"
+            type="password"
+            show-password
+            size="mini"
+            placeholder="GitHub Personal Access Token"
+            @change="saveGitHubConfig"
+            @keydown.native.stop
+          ></el-input>
+        </div>
+      </div>
+      <div class="row">
+        <div class="rowItem" style="width: 100%;">
+          <span class="name" style="width: 70px;">仓库名</span>
+          <el-input
+            v-model="githubConfig.repo"
+            size="mini"
+            placeholder="如 tokewer/mind-map-main"
+            @change="saveGitHubConfig"
+            @keydown.native.stop
+          ></el-input>
+        </div>
+      </div>
+      <div class="row">
+        <div class="rowItem" style="width: 100%;">
+          <span class="name" style="width: 70px;">分支</span>
+          <el-input
+            v-model="githubConfig.branch"
+            size="mini"
+            placeholder="master"
+            @change="saveGitHubConfig"
+            @keydown.native.stop
+          ></el-input>
+        </div>
+      </div>
+      <div class="row" style="margin-top: 10px;">
+        <div class="rowItem" style="width: 100%; display: flex; gap: 8px;">
+          <el-button
+            size="mini"
+            type="primary"
+            :loading="isSyncingGitHub"
+            @click="syncToGitHubManual"
+          >立即同步到 GitHub</el-button>
+        </div>
+      </div>
     </div>
   </Sidebar>
 </template>
@@ -374,6 +433,12 @@
 <script>
 import Sidebar from './Sidebar.vue'
 import { storeConfig } from '@/api'
+import {
+  getGitHubSyncConfig,
+  saveGitHubSyncConfig,
+  uploadRemoteFile
+} from '@/api/githubSync'
+import { getReviewData } from '@/review'
 import { mapState, mapMutations } from 'vuex'
 import Color from './Color.vue'
 
@@ -425,7 +490,9 @@ export default {
         isShowScrollbar: false,
         enableDragImport: false,
         enableAi: false
-      }
+      },
+      githubConfig: getGitHubSyncConfig(),
+      isSyncingGitHub: false
     }
   },
   computed: {
@@ -573,6 +640,34 @@ export default {
       this.setLocalConfig({
         [key]: value
       })
+    },
+
+    saveGitHubConfig() {
+      this.githubConfig = saveGitHubSyncConfig(this.githubConfig)
+      this.$message.success('GitHub 同步设置已保存')
+    },
+
+    async syncToGitHubManual() {
+      if (!this.githubConfig.token || !this.githubConfig.repo) {
+        this.$message.warning('请先填写 GitHub Token 和仓库名称')
+        return
+      }
+      this.isSyncingGitHub = true
+      try {
+        const fullData = this.mindMap.getData(true)
+        if (fullData) {
+          await uploadRemoteFile('mindMap.json', JSON.stringify(fullData, null, 2), 'manual: sync mindMap data')
+        }
+        const reviewData = getReviewData()
+        if (reviewData) {
+          await uploadRemoteFile('review.json', JSON.stringify(reviewData, null, 2), 'manual: sync review data')
+        }
+        this.$message.success('已成功同步至 GitHub 仓库！')
+      } catch (e) {
+        this.$message.error('同步失败: ' + (e.message || '网络或权限错误'))
+      } finally {
+        this.isSyncingGitHub = false
+      }
     }
   }
 }

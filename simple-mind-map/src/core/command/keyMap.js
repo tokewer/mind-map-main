@@ -59,6 +59,7 @@ for (let i = 0; i <= 9; i++) {
 // 字母
 'abcdefghijklmnopqrstuvwxyz'.split('').forEach((n, index) => {
   map[n] = index + 65
+  map[n.toUpperCase()] = index + 65
 })
 
 export const keyMap = map

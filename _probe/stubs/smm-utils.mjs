@@ -15,3 +15,7 @@ export const copyRenderTree = (obj, tree) => {
     JSON.stringify(tree, (k, v) => (k === '_node' || k === '_generalizationNode' ? undefined : v))
   )
 }
+export const getTextFromHtml = html => {
+  if (!html) return ''
+  return String(html).replace(/<[^>]+>/g, '').trim()
+}

@@ -1,9 +1,15 @@
 import Vue from 'vue'
+import vuexStore from '@/store'
+import * as directoryStorage from '@/api/directoryStorage'
 import { notifyWorkspaceChanged } from '@/api/workspaceEvents'
 
-// 复习数据层：纯 localStorage，跨文件全局复习集合
+// 复习数据层：
+// - 工作目录模式（isDirectoryMode === true）：复习节点与思维导图保存在同一文件夹
+//   （<工作目录>/maps/<导图名>/review.json），全局配置及未绑定导图节点保存在 <工作目录>/review.json。
+// - 浏览器模式（降级）：使用 localStorage（MIND_MAP_REVIEW_DATA）。
 // 节点以 uid（simple-mind-map 全局唯一）为键，与导图内容解耦
 const REVIEW_KEY = 'MIND_MAP_REVIEW_DATA'
+const FILE_LIST_KEY = 'SIMPLE_MIND_MAP_FILE_LIST'
 const DEFAULT_CYCLES = [1, 3, 4]
 const DATA_VERSION = 5
 
@@ -193,17 +199,84 @@ export const getReviewStage = node => {
   return 3
 }
 
-const load = () => {
+const createFreshData = () =>
+  normalizePresets({
+    version: DATA_VERSION,
+    defaultCycles: [...DEFAULT_CYCLES],
+    activePresetId: null,
+    nodes: {}
+  })
+
+// 判断当前是否处于本地工作目录模式且句柄有效
+export const isDirectoryReviewMode = () =>
+  !!(
+    vuexStore &&
+    vuexStore.state &&
+    vuexStore.state.isDirectoryMode &&
+    directoryStorage.getDirectoryHandleValue()
+  )
+
+// 工作目录模式下的内存权威缓存与已落盘签名
+let directoryReviewCache = null
+const knownMapKeys = new Set()
+const lastSavedSignatures = new Map()
+
+// 跨标签页（如导图编辑页 #/ 与独立复习页 #/review）同步广播
+const REVIEW_SYNC_CHANNEL = 'mind_map_review_sync'
+let syncChannel = null
+const syncSubscribers = new Set()
+
+const getSyncChannel = () => {
+  if (syncChannel) return syncChannel
+  if (typeof BroadcastChannel !== 'undefined') {
+    try {
+      syncChannel = new BroadcastChannel(REVIEW_SYNC_CHANNEL)
+      if (typeof syncChannel.unref === 'function') {
+        syncChannel.unref()
+      }
+      syncChannel.onmessage = event => {
+        if (event && event.data && event.data.type === 'review_updated') {
+          syncSubscribers.forEach(fn => {
+            try {
+              fn(event.data)
+            } catch (e) {
+              // 忽略单个订阅回调异常
+            }
+          })
+        }
+      }
+    } catch (e) {
+      syncChannel = null
+    }
+  }
+  return syncChannel
+}
+
+const broadcastReviewUpdated = () => {
+  const ch = getSyncChannel()
+  if (ch) {
+    try {
+      ch.postMessage({ type: 'review_updated', time: Date.now() })
+    } catch (e) {
+      // 忽略广播异常
+    }
+  }
+}
+
+export const subscribeReviewSync = handler => {
+  const ch = getSyncChannel()
+  if (!ch || typeof handler !== 'function') return () => {}
+  syncSubscribers.add(handler)
+  return () => {
+    syncSubscribers.delete(handler)
+  }
+}
+
+const loadFromLocalStorage = () => {
   try {
     const raw = localStorage.getItem(REVIEW_KEY)
     if (!raw) {
-      const fresh = normalizePresets({
-        version: DATA_VERSION,
-        defaultCycles: [...DEFAULT_CYCLES],
-        activePresetId: null,
-        nodes: {}
-      })
-      return fresh
+      return createFreshData()
     }
     const data = JSON.parse(raw)
     const merged = {
@@ -216,20 +289,263 @@ const load = () => {
     merged.version = Number(data.version) || 1
     return migrate(merged)
   } catch (e) {
-    const fresh = normalizePresets({
-      version: DATA_VERSION,
-      defaultCycles: [...DEFAULT_CYCLES],
-      activePresetId: null,
-      nodes: {}
-    })
-    return fresh
+    return createFreshData()
   }
 }
 
+// 读取旧版浏览器文件列表 id -> name 映射，用于首次迁移复习节点归属导图
+const loadLegacyIdToNameMap = () => {
+  const map = {}
+  try {
+    const raw = localStorage.getItem(FILE_LIST_KEY)
+    const list = raw ? JSON.parse(raw) : []
+    if (Array.isArray(list)) {
+      list.forEach(item => {
+        if (item && item.id && item.name) {
+          map[item.id] = String(item.name)
+        }
+      })
+    }
+  } catch (e) {
+    // 忽略
+  }
+  return map
+}
+
+// 解析节点归属的导图文件夹名（返回空字符串表示未绑定到具体导图文件夹，存于根目录 review.json）
+const resolveNodeMapKey = (node, idToNameMap = null) => {
+  if (!node || typeof node !== 'object') return ''
+  const rawFileId = String(node.fileId || '').trim()
+  const rawFileName = String(node.fileName || '').trim()
+  // 1. fileId 直接是目录模式的文件标识（非浏览器模式随机 id file_xxx）
+  if (rawFileId && !rawFileId.startsWith('file_')) {
+    const key = directoryStorage.toMapKey(rawFileId)
+    if (key) return key
+  }
+  // 2. 通过旧版 fileId 查导图名或使用节点的 fileName 匹配工作目录中已有的导图
+  const mappedName = (idToNameMap && rawFileId && idToNameMap[rawFileId]) || rawFileName
+  if (mappedName && mappedName !== '手动添加') {
+    const key = directoryStorage.toMapKey(mappedName)
+    if (key && knownMapKeys.has(key)) return key
+  }
+  return ''
+}
+
+// 将复习总数据拆分为：根目录全局配置（含未归属节点）+ 各导图文件夹的 nodes 字典
+const partitionReviewData = (data, idToNameMap = null) => {
+  const mapBuckets = {}
+  knownMapKeys.forEach(k => {
+    if (k) mapBuckets[k] = {}
+  })
+  const unassignedNodes = {}
+  const nodes = (data && data.nodes) || {}
+  Object.keys(nodes).forEach(uid => {
+    const n = nodes[uid]
+    if (!n || typeof n !== 'object') return
+    const key = resolveNodeMapKey(n, idToNameMap)
+    if (key) {
+      knownMapKeys.add(key)
+      n.fileId = directoryStorage.ensureSmmExt(key)
+      n.fileName = key
+      if (!mapBuckets[key]) mapBuckets[key] = {}
+      mapBuckets[key][uid] = n
+    } else {
+      unassignedNodes[uid] = n
+    }
+  })
+  const rootPayload = {
+    version: DATA_VERSION,
+    defaultCycles: Array.isArray(data.defaultCycles) && data.defaultCycles.length
+      ? data.defaultCycles
+      : [...DEFAULT_CYCLES],
+    activePresetId: data.activePresetId || null,
+    presets: Array.isArray(data.presets) ? data.presets : [],
+    migratedFromLocalStorage: true,
+    nodes: unassignedNodes
+  }
+  return { rootPayload, mapBuckets }
+}
+
+// 将内存中的复习数据增量写入本地工作目录（仅写发生变化的 review.json）
+const persistDirectoryReviewData = (data, options = {}) => {
+  const normalized = migrate(data)
+  directoryReviewCache = normalized
+  const { rootPayload, mapBuckets } = partitionReviewData(normalized)
+  const rootSig = JSON.stringify(rootPayload)
+  if (options.forceRoot || lastSavedSignatures.get('__root__') !== rootSig) {
+    lastSavedSignatures.set('__root__', rootSig)
+    directoryStorage.saveRootReviewFile(rootPayload)
+  }
+  Object.keys(mapBuckets).forEach(key => {
+    const mapNodes = mapBuckets[key] || {}
+    const mapSig = JSON.stringify(mapNodes)
+    const sigKey = 'map:' + key
+    if (options.forceMaps || lastSavedSignatures.get(sigKey) !== mapSig) {
+      lastSavedSignatures.set(sigKey, mapSig)
+      directoryStorage.saveMapReviewFile(key, mapNodes)
+    }
+  })
+}
+
+// 从本地工作目录加载并合并所有导图的 review.json 与根目录 review.json；
+// 若工作目录首次启用复习文件且 localStorage 中有旧复习数据，自动迁移到本地目录。
+export const syncReviewFromDirectory = async () => {
+  if (!directoryStorage.getDirectoryHandleValue()) {
+    return { ok: false, message: '工作目录未打开' }
+  }
+  const loaded = await directoryStorage.loadAllDirectoryReviews()
+  if (!loaded || !loaded.ok) {
+    return { ok: false, message: '读取目录复习数据失败' }
+  }
+  knownMapKeys.clear()
+  lastSavedSignatures.clear()
+  ;(loaded.mapKeys || []).forEach(k => {
+    if (k) knownMapKeys.add(k)
+  })
+
+  const rootData = loaded.rootData && typeof loaded.rootData === 'object' ? loaded.rootData : null
+  const mergedNodes = {}
+
+  // 1. 先加载根目录未绑定导图的复习节点
+  if (rootData && rootData.nodes && typeof rootData.nodes === 'object') {
+    Object.keys(rootData.nodes).forEach(uid => {
+      const n = rootData.nodes[uid]
+      if (n && typeof n === 'object') {
+        mergedNodes[uid] = { ...n, uid: n.uid || uid }
+      }
+    })
+  }
+
+  // 2. 加载各导图文件夹 maps/<导图名>/review.json 中的节点（以文件夹名为权威来源）
+  ;(loaded.mapKeys || []).forEach(key => {
+    const entry = loaded.mapReviews && loaded.mapReviews[key]
+    const rawNodes = entry && entry.data && entry.data.nodes
+    if (rawNodes && typeof rawNodes === 'object') {
+      const canonicalId = directoryStorage.ensureSmmExt(key)
+      Object.keys(rawNodes).forEach(uid => {
+        const n = rawNodes[uid]
+        if (n && typeof n === 'object') {
+          mergedNodes[uid] = {
+            ...n,
+            uid: n.uid || uid,
+            fileId: canonicalId,
+            fileName: key
+          }
+        }
+      })
+    }
+  })
+
+  let defaultCycles =
+    rootData && Array.isArray(rootData.defaultCycles) && rootData.defaultCycles.length
+      ? rootData.defaultCycles
+      : [...DEFAULT_CYCLES]
+  let activePresetId = rootData && rootData.activePresetId ? rootData.activePresetId : null
+  let presets = rootData && Array.isArray(rootData.presets) ? rootData.presets : undefined
+
+  // 3. 首次迁移：当工作目录尚无根目录 review.json 且各导图下也无任何已存复习节点时，
+  //    自动将浏览器 localStorage 中的旧复习数据迁移进本地目录。
+  let migratedFromLs = false
+  if (!loaded.rootExists && Object.keys(mergedNodes).length === 0) {
+    const rawLs = typeof localStorage !== 'undefined' ? localStorage.getItem(REVIEW_KEY) : null
+    if (rawLs) {
+      const lsData = loadFromLocalStorage()
+      const idToNameMap = loadLegacyIdToNameMap()
+      if (Array.isArray(lsData.defaultCycles) && lsData.defaultCycles.length) {
+        defaultCycles = lsData.defaultCycles
+      }
+      if (lsData.activePresetId) {
+        activePresetId = lsData.activePresetId
+      }
+      if (Array.isArray(lsData.presets)) {
+        presets = lsData.presets
+      }
+      const lsNodes = lsData.nodes || {}
+      Object.keys(lsNodes).forEach(uid => {
+        const n = lsNodes[uid]
+        if (!n || typeof n !== 'object') return
+        const copy = { ...n, uid: n.uid || uid }
+        const matchedKey = resolveNodeMapKey(copy, idToNameMap)
+        if (matchedKey) {
+          copy.fileId = directoryStorage.ensureSmmExt(matchedKey)
+          copy.fileName = matchedKey
+        }
+        mergedNodes[uid] = copy
+      })
+      migratedFromLs = true
+    }
+  }
+
+  const combined = migrate({
+    version: DATA_VERSION,
+    defaultCycles,
+    activePresetId,
+    presets,
+    nodes: mergedNodes
+  })
+  directoryReviewCache = combined
+
+  // 计算当前分组并把尚未在磁盘建立的 review.json 或迁移产生的数据落盘
+  const { rootPayload, mapBuckets } = partitionReviewData(combined)
+  const rootSig = JSON.stringify(rootPayload)
+  lastSavedSignatures.set('__root__', rootSig)
+  if (!loaded.rootExists || migratedFromLs) {
+    directoryStorage.saveRootReviewFile(rootPayload)
+  }
+  Object.keys(mapBuckets).forEach(key => {
+    const mapNodes = mapBuckets[key] || {}
+    const mapSig = JSON.stringify(mapNodes)
+    lastSavedSignatures.set('map:' + key, mapSig)
+    const entry = loaded.mapReviews && loaded.mapReviews[key]
+    if (!entry || !entry.exists || (migratedFromLs && Object.keys(mapNodes).length > 0)) {
+      directoryStorage.saveMapReviewFile(key, mapNodes)
+    }
+  })
+
+  await directoryStorage.flushDirectoryWrites()
+  if (Vue.prototype.$bus) {
+    Vue.prototype.$bus.$emit('review_changed')
+  }
+  return { ok: true, data: directoryReviewCache }
+}
+
+// 等待所有待写入的本地复习文件落盘完成
+export const flushReviewWrites = async () => {
+  await directoryStorage.flushDirectoryWrites()
+}
+
+// 退出工作目录模式时清理内存复习缓存，回退到 localStorage
+export const leaveDirectoryReviewMode = () => {
+  directoryReviewCache = null
+  knownMapKeys.clear()
+  lastSavedSignatures.clear()
+}
+
+const load = () => {
+  if (isDirectoryReviewMode()) {
+    if (!directoryReviewCache) {
+      directoryReviewCache = createFreshData()
+    }
+    return directoryReviewCache
+  }
+  return loadFromLocalStorage()
+}
+
 const save = data => {
+  if (isDirectoryReviewMode()) {
+    try {
+      persistDirectoryReviewData(data)
+      notifyWorkspaceChanged()
+      broadcastReviewUpdated()
+    } catch (e) {
+      console.log(e)
+    }
+    return
+  }
   try {
     localStorage.setItem(REVIEW_KEY, JSON.stringify(data))
     notifyWorkspaceChanged()
+    broadcastReviewUpdated()
   } catch (e) {
     console.log(e)
     if (isQuotaExceeded(e)) {
@@ -362,12 +678,35 @@ export const getNode = uid => {
 export const addReview = ({ uid, name, path = '', fileId = '', fileName = '', parentUid = '', cycles = null }) => {
   const data = load()
   const today = todayStr()
+  let resolvedFileId = fileId
+  let resolvedFileName = fileName
+  if (isDirectoryReviewMode()) {
+    // 若调用方未显式传 fileId（且非手动添加），默认绑定到当前打开的导图文件
+    if (!resolvedFileId && resolvedFileName !== '手动添加') {
+      const currentFile =
+        (vuexStore && vuexStore.state && vuexStore.state.currentSmmFile) ||
+        directoryStorage.getCurrentFileName() ||
+        ''
+      if (currentFile) {
+        resolvedFileId = currentFile
+        resolvedFileName = resolvedFileName || directoryStorage.toMapKey(currentFile)
+      }
+    }
+    if (resolvedFileId && !String(resolvedFileId).startsWith('file_')) {
+      const key = directoryStorage.toMapKey(resolvedFileId)
+      if (key) {
+        resolvedFileId = directoryStorage.ensureSmmExt(key)
+        resolvedFileName = key
+        knownMapKeys.add(key)
+      }
+    }
+  }
   const node = {
     uid: uid || 'manual_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
     name: name || '未命名',
     path,
-    fileId,
-    fileName,
+    fileId: resolvedFileId,
+    fileName: resolvedFileName,
     parentUid: parentUid || '',
     cycles: parseCycles(cycles && cycles.length ? cycles : data.defaultCycles),
     times: 0,
@@ -412,19 +751,82 @@ export const updateReviewName = (uid, name) => {
   save(data)
 }
 
-// 文件重命名后，同步更新所有属于该文件的复习记录文件名
-export const renameFileForReviews = (fileId, newName) => {
+// 文件重命名后，同步更新所有属于该文件的复习记录文件名与文件标识
+export const renameFileForReviews = (fileId, newName, newFileId = '') => {
   if (!fileId) return
   const data = load()
   let changed = false
+  if (isDirectoryReviewMode()) {
+    const oldKey = directoryStorage.toMapKey(fileId)
+    const newKey = directoryStorage.toMapKey(newFileId || newName)
+    if (!oldKey || !newKey) return
+    const canonicalNewId = directoryStorage.ensureSmmExt(newKey)
+    knownMapKeys.delete(oldKey)
+    knownMapKeys.add(newKey)
+    lastSavedSignatures.delete('map:' + oldKey)
+    lastSavedSignatures.delete('map:' + newKey)
+    Object.keys(data.nodes).forEach(uid => {
+      const n = data.nodes[uid]
+      if (!n) return
+      if (
+        n.fileId === fileId ||
+        directoryStorage.toMapKey(n.fileId) === oldKey ||
+        n.fileName === oldKey
+      ) {
+        n.fileId = canonicalNewId
+        n.fileName = newKey
+        changed = true
+      }
+    })
+    // 即使没有关联节点，也把新文件夹下的 review.json 头信息刷新为新名称
+    persistDirectoryReviewData(data, { forceMaps: true })
+    notifyWorkspaceChanged()
+    broadcastReviewUpdated()
+    return
+  }
   Object.keys(data.nodes).forEach(uid => {
     const n = data.nodes[uid]
-    if (n.fileId === fileId && n.fileName !== newName) {
-      n.fileName = newName
-      changed = true
+    if (n.fileId === fileId) {
+      if (n.fileName !== newName) {
+        n.fileName = newName
+        changed = true
+      }
+      if (newFileId && n.fileId !== newFileId) {
+        n.fileId = newFileId
+        changed = true
+      }
     }
   })
   if (changed) save(data)
+}
+
+// 删除导图文件时，清理内存中属于该导图的复习节点（导图文件夹本身已随删除一并移除）
+export const deleteFileForReviews = fileId => {
+  if (!fileId) return
+  const data = load()
+  const targetKey = directoryStorage.toMapKey(fileId)
+  if (isDirectoryReviewMode() && targetKey) {
+    knownMapKeys.delete(targetKey)
+    lastSavedSignatures.delete('map:' + targetKey)
+  }
+  let changed = false
+  Object.keys(data.nodes).forEach(uid => {
+    const n = data.nodes[uid]
+    if (!n) return
+    if (
+      n.fileId === fileId ||
+      (isDirectoryReviewMode() && targetKey && directoryStorage.toMapKey(n.fileId) === targetKey)
+    ) {
+      delete data.nodes[uid]
+      changed = true
+    }
+  })
+  if (changed) {
+    save(data)
+  } else if (isDirectoryReviewMode()) {
+    notifyWorkspaceChanged()
+    broadcastReviewUpdated()
+  }
 }
 
 export const updateCycles = (uid, cycles) => {
@@ -489,9 +891,18 @@ export const getAllTags = () => {
 
 // ---------- 复习卡片 ----------
 // 卡片类型：qa（问答）、cloze（填空）、judge（判断）、example（例题）
-export const addCard = (uid, card) => {
-  const data = load()
-  const node = data.nodes[uid]
+// 若节点尚未加入复习，自动为其创建一条复习记录再保存卡片
+export const addCard = (uid, card, nodeInfo = null) => {
+  let data = load()
+  let node = data.nodes[uid]
+  if (!node && uid) {
+    addReview({
+      uid,
+      ...(nodeInfo && typeof nodeInfo === 'object' ? nodeInfo : {})
+    })
+    data = load()
+    node = data.nodes[uid]
+  }
   if (!node) return null
   node.cards = node.cards || []
   node.cards.push({
@@ -727,7 +1138,12 @@ export const getStats = () => {
 // 导图文件是否有关联的复习节点
 export const getFileNodeCount = fileId => {
   if (!fileId) return 0
-  return getNodeList().filter(n => n.fileId === fileId).length
+  const targetKey = directoryStorage.toMapKey(fileId)
+  return getNodeList().filter(
+    n =>
+      n.fileId === fileId ||
+      (isDirectoryReviewMode() && targetKey && directoryStorage.toMapKey(n.fileId) === targetKey)
+  ).length
 }
 
 // 导出 / 导入（JSON 字符串）

@@ -121,7 +121,12 @@ import {
 } from '@/api'
 import * as directoryStorage from '@/api/directoryStorage'
 import { archiveBrowserMaps, clearBrowserMaps, countUnclearedBrowserMaps } from '@/api/browserCleanup'
-import { renameFileForReviews } from '@/review'
+import {
+  renameFileForReviews,
+  deleteFileForReviews,
+  syncReviewFromDirectory,
+  leaveDirectoryReviewMode
+} from '@/review'
 import {
   saveWorkspaceFile,
   openWorkspaceFile,
@@ -403,6 +408,8 @@ export default {
             if (this.currentSmmFile === f.id) {
               this.$store.commit('setCurrentSmmFile', res.fileName)
             }
+            renameFileForReviews(f.id, value.trim(), res.fileName)
+            this.$bus.$emit('review_changed')
             this.refresh()
             this.$message.success('已重命名')
           })
@@ -428,7 +435,7 @@ export default {
           this.$message.warning('至少保留一个文件')
           return
         }
-        this.$confirm(`确定删除「${f.name}」吗？该文件的复习关联不受影响。`, '删除文件', {
+        this.$confirm(`确定删除「${f.name}」吗？将同时删除该导图文件夹内的导图数据与本地复习记录。`, '删除文件', {
           confirmButtonText: '删除',
           cancelButtonText: '取消',
           type: 'warning'
@@ -443,6 +450,8 @@ export default {
               this.$message.warning((res && res.message) || '删除失败')
               return
             }
+            deleteFileForReviews(f.id)
+            this.$bus.$emit('review_changed')
             clearDataCache()
             if (wasCurrent) {
               this.$store.commit('setCurrentSmmFile', '')
@@ -539,6 +548,7 @@ export default {
           }
         }
       }
+      await syncReviewFromDirectory()
       this.refresh()
       this.$message.success('工作目录已就绪：' + res.name)
     },
@@ -561,7 +571,7 @@ export default {
     async onExitDirectory() {
       this.popoverVisible = false
       this.$confirm(
-        '退出工作目录模式？当前导图会先保存到工作目录，之后回到浏览器内置存储。',
+        '退出工作目录模式？当前导图与复习数据会先保存到工作目录，之后回到浏览器内置存储。',
         '退出工作目录',
         {
           confirmButtonText: '保存并退出',
@@ -572,6 +582,7 @@ export default {
         .then(async () => {
           await this.saveBeforeFileChange()
           await directoryStorage.leaveDirectoryMode()
+          leaveDirectoryReviewMode()
           this.$store.commit('setIsDirectoryMode', false)
           this.$store.commit('setDirectoryName', '')
           this.$store.commit('setCurrentSmmFile', '')
@@ -580,6 +591,7 @@ export default {
           this.exitLocalFileMode()
           const newId = getCurrentFileId()
           this.$bus.$emit('setData', readFileData(newId))
+          this.$bus.$emit('review_changed')
           this.refresh()
           this.$message.success('已退出工作目录模式')
         })

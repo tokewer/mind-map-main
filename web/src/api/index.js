@@ -7,6 +7,7 @@ import { scheduleWorkspaceAutoSave } from './workspace'
 import { syncFromDiskOnce, markBootstrapKey, markKeyRemoved } from './serverStorage'
 import * as directoryStorage from './directoryStorage'
 import { getLocalFileHandle, getLocalFileName } from './localFileHandle'
+import { syncReviewFromDirectory, flushReviewWrites } from '@/review'
 
 const SIMPLE_MIND_MAP_DATA = 'SIMPLE_MIND_MAP_DATA' // 旧版单文件 key，仅用于首次迁移
 const SIMPLE_MIND_MAP_CONFIG = 'SIMPLE_MIND_MAP_CONFIG'
@@ -260,6 +261,7 @@ export const resumeDirectoryMode = async (withReauth = false) => {
       if (!opened || !opened.ok) opened = null
     }
   }
+  await syncReviewFromDirectory()
   return {
     ok: true,
     name: res.name,
@@ -740,6 +742,7 @@ export const flushDirectoryStore = async () => {
   // 落盘过程中可能又有新的变更入队（保存是异步的），再收一轮，确保调用方
   // await 返回时确实没有残留待写数据。
   if (directoryPendingSaves.size) await directoryFlushSave()
+  await flushReviewWrites()
 }
 
 // ---------- 工作目录模式：历史版本（以文件形式存在每张导图 history/ 下） ----------

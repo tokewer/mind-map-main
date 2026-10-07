@@ -464,8 +464,11 @@
                 <span>浏览器总配额（此站点）</span>
                 <span>{{ fmtSize(storageTotal) }}（已用 {{ fmtSize(storageUsed) }}）</span>
               </div>
-              <div class="setTip" v-if="!isServerAvailable">
-                浏览器存储空间不足（约 5-10MB）会影响保存。导图多时可清理历史版本释放空间。
+              <div class="setTip" v-if="isDirectoryMode">
+                当前使用本地工作目录（{{ directoryName || '本地文件夹' }}），复习节点已与对应思维导图一同保存在 <code>maps/&lt;导图名&gt;/review.json</code> 中。
+              </div>
+              <div class="setTip" v-else-if="!isServerAvailable">
+                浏览器存储空间不足（约 5-10MB）会影响保存。导图多时可清理历史版本释放空间，或切换至本地工作目录模式。
               </div>
               <div class="setTip" v-else>
                 当前使用服务器存储，数据已自动备份到本地文件，无需担心浏览器存储限制。
@@ -651,9 +654,12 @@ import {
   updateTags,
   updateFrequency,
   cardsToMarkdown,
-  markdownToCards
+  markdownToCards,
+  syncReviewFromDirectory,
+  flushReviewWrites,
+  subscribeReviewSync
 } from '@/review'
-import { getFileList, getLocalConfig, readFileData } from '@/api'
+import { getFileList, getLocalConfig, readFileData, resumeDirectoryMode } from '@/api'
 import * as directoryStorage from '@/api/directoryStorage'
 import { buildParentMap, buildReviewGroups, getReviewFileKey, toDirectorySubjectList } from '@/review/tree'
 import {
@@ -879,7 +885,8 @@ export default {
     },
     ...mapState({
       isDark: state => state.localConfig.isDark,
-      isDirectoryMode: state => state.isDirectoryMode
+      isDirectoryMode: state => state.isDirectoryMode,
+      directoryName: state => state.directoryName
     }),
     isServerAvailable() {
       return isServerAvailable()
@@ -906,17 +913,105 @@ export default {
       weekday: 'long'
     })
     this.refresh()
+    this.restoreDirectoryForReview()
     this.$bus.$on('review_data_change', this.refresh)
+    this.$bus.$on('review_changed', this.refresh)
     this.$bus.$on('workspace_data_change', this.onWorkspaceChanged)
     this.$bus.$on('workspace_auto_save_error', this.onWorkspaceAutoSaveError)
+    this._unsubscribeReviewSync = subscribeReviewSync(() => {
+      if (this.isDirectoryMode) {
+        syncReviewFromDirectory().then(() => this.refresh())
+      } else {
+        this.refresh()
+      }
+    })
+    window.addEventListener('pagehide', this.onFlushBeforeLeave)
+    document.addEventListener('visibilitychange', this.onVisibilityChange)
   },
   beforeDestroy() {
     this.$bus.$off('review_data_change', this.refresh)
+    this.$bus.$off('review_changed', this.refresh)
     this.$bus.$off('workspace_data_change', this.onWorkspaceChanged)
     this.$bus.$off('workspace_auto_save_error', this.onWorkspaceAutoSaveError)
+    if (this._unsubscribeReviewSync) {
+      this._unsubscribeReviewSync()
+      this._unsubscribeReviewSync = null
+    }
+    window.removeEventListener('pagehide', this.onFlushBeforeLeave)
+    document.removeEventListener('visibilitychange', this.onVisibilityChange)
+    this.unwatchDirectoryReauth()
   },
   methods: {
     ...mapMutations(['setLocalConfig']),
+    onFlushBeforeLeave() {
+      if (this.isDirectoryMode) {
+        flushReviewWrites()
+      }
+    },
+    onVisibilityChange() {
+      if (document.visibilityState === 'hidden') {
+        this.onFlushBeforeLeave()
+      } else if (document.visibilityState === 'visible' && this.isDirectoryMode) {
+        syncReviewFromDirectory().then(() => this.refresh())
+      }
+    },
+    async restoreDirectoryForReview() {
+      try {
+        if (this.isDirectoryMode && directoryStorage.getDirectoryHandleValue()) {
+          await syncReviewFromDirectory()
+          this.refresh()
+          return
+        }
+        const res = await resumeDirectoryMode(false)
+        if (!res) return
+        if (res.ok) {
+          this.$store.commit('setIsDirectoryMode', true)
+          this.$store.commit('setDirectoryName', res.name || '')
+          if (res.fileName) {
+            this.$store.commit('setCurrentSmmFile', res.fileName)
+          }
+          this.refresh()
+          return
+        }
+        if (res.needReauth || res.reason === 'reauth-error') {
+          this.watchForDirectoryReauth()
+        }
+      } catch (e) {
+        // 忽略
+      }
+    },
+    watchForDirectoryReauth() {
+      if (this._dirReauthBound) return
+      this._dirReauthBound = true
+      const attempt = async () => {
+        this.unwatchDirectoryReauth()
+        try {
+          const res = await resumeDirectoryMode(true)
+          if (res && res.ok) {
+            this.$store.commit('setIsDirectoryMode', true)
+            this.$store.commit('setDirectoryName', res.name || '')
+            if (res.fileName) {
+              this.$store.commit('setCurrentSmmFile', res.fileName)
+            }
+            this.refresh()
+          }
+        } catch (err) {
+          // 忽略
+        }
+      }
+      this._dirReauthHandler = attempt
+      window.addEventListener('pointerdown', attempt, { capture: true, once: true })
+      window.addEventListener('keydown', attempt, { capture: true, once: true })
+    },
+    unwatchDirectoryReauth() {
+      if (!this._dirReauthBound) return
+      this._dirReauthBound = false
+      if (this._dirReauthHandler) {
+        window.removeEventListener('pointerdown', this._dirReauthHandler, { capture: true })
+        window.removeEventListener('keydown', this._dirReauthHandler, { capture: true })
+        this._dirReauthHandler = null
+      }
+    },
     clearReviewFilters() {
       this.fStatus = ''
       this.fDue = ''
@@ -979,7 +1074,7 @@ export default {
       }
       this.calcStorageUsage()
     },
-    // 统计本应用各部分的 localStorage 占用（UTF-16 每字符 2 字节）
+    // 统计本应用各部分的存储占用（UTF-16 每字符 2 字节）
     calcStorageUsage() {
       let fileBytes = 0
       let historyBytes = 0
@@ -994,6 +1089,14 @@ export default {
           historyBytes += bytes
         } else if (k === 'MIND_MAP_REVIEW_DATA') {
           reviewBytes += bytes
+        }
+      }
+      if (this.isDirectoryMode) {
+        try {
+          const exported = exportReviewData()
+          reviewBytes = exported ? exported.length * 2 : 0
+        } catch (e) {
+          // 忽略
         }
       }
       this.fileDataBytes = fileBytes

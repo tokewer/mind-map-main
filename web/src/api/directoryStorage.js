@@ -3,15 +3,17 @@
 //
 // 目录结构（每个导图 = 工作目录 maps/ 下的一个文件夹）：
 //   <工作目录>/
+//   ├─ review.json                  # 全局复习配置（周期预设、默认周期）及未归属导图的复习节点
 //   └─ maps/
 //      ├─ <导图名>/                    # 一个导图 = 一个文件夹（文件夹名即导图名）
 //      │  ├─ data.smm                  # 导图数据文件（固定名，正文唯一权威来源）
+//      │  ├─ review.json               # 该导图的复习节点数据（周期进度、卡片、标签、重点标记等）
 //      │  ├─ images/                   # 该导图的图片文件（正文只存相对路径引用）
 //      │  └─ history/                  # 该导图的历史版本（每份一个独立 .smm.json 文件）
 //      └─ ...
 //
 // 原则：
-//   - 本地文件系统中的 .smm 是唯一权威数据源，不在 localStorage/IndexedDB 存正文副本。
+//   - 本地文件系统中的 .smm 与 review.json 是权威数据源，与思维导图保存在同一文件夹。
 //   - 图片外置到每张导图自己的 images/，.smm 内只存相对路径引用（root.data.imgMap 或富文本）。
 //   - 历史版本以独立文件保存在每张导图自己的 history/ 下，互相独立、不随正文变化失效。
 //   - 兼容旧布局：历史遗留的平铺 maps/*.smm（图片在目录根 images/）会被自动迁移进新布局。
@@ -31,6 +33,8 @@ const IMAGES_DIR = 'images'
 const HISTORY_DIR = 'history'
 // 导图文件夹内数据文件固定名（重命名/移动/复制文件夹时无需同步改内层文件名）
 const DATA_FILE = 'data.smm'
+// 导图文件夹及工作目录根下的复习数据文件名
+const REVIEW_FILE = 'review.json'
 // 历史版本保留策略（与旧版 localStorage 历史一致）
 const HISTORY_MAX_AUTO = 10
 const HISTORY_MAX_TOTAL = 30
@@ -69,6 +73,8 @@ const enqueueWrite = task => {
   writeQueue = run.catch(() => {})
   return run
 }
+
+export const flushDirectoryWrites = () => writeQueue
 
 const revokeAllUrls = () => {
   urlToPathMap.forEach((path, url) => {
@@ -222,11 +228,11 @@ const resolveMapsDir = async (create = false) => {
 }
 
 // 导图标识解析：兼容 <name>.smm 与 <name> 两种写法，统一返回文件夹名（不含扩展名）
-const toMapKey = name => {
+export const toMapKey = name => {
   const str = String(name || '')
   return str.toLowerCase().endsWith('.smm') ? str.slice(0, -4) : str
 }
-const ensureSmmExt = name => (name.toLowerCase().endsWith('.smm') ? name : name + '.smm')
+export const ensureSmmExt = name => (name.toLowerCase().endsWith('.smm') ? name : name + '.smm')
 
 // 取得导图文件夹句柄（不存在则创建）
 const ensureMapFolder = async (mapsDir, key) => {
@@ -576,6 +582,7 @@ export const createMapFile = async (name, data) => {
   const newFolder = await ensureMapFolder(mapsDir, key)
   if (!newFolder) return { ok: false, message: '创建目录失败' }
   const dataFile = await getFile(newFolder, DATA_FILE, true)
+  const existingReviewFile = await getFile(newFolder, REVIEW_FILE, false)
   const fileName = ensureSmmExt(key)
   try {
     // 未提供正文（正常新建）或提供了无 root 的坏数据时，一律落盘一份含根节点的空导图。
@@ -584,6 +591,15 @@ export const createMapFile = async (name, data) => {
     const { data: outData } = await extractImagesForMap(newFolder, source)
     await enqueueWrite(async () => {
       await writeText(dataFile, JSON.stringify(isUsableMapData(outData) ? outData : createDefaultMapData()))
+      if (!existingReviewFile) {
+        const reviewFile = await getFile(newFolder, REVIEW_FILE, true)
+        if (reviewFile) {
+          await writeText(
+            reviewFile,
+            JSON.stringify({ version: 1, fileName: key, fileId: fileName, nodes: {} }, null, 2)
+          )
+        }
+      }
     })
     currentFileName = fileName
     await saveWorkspaceMeta({ directoryName, currentFileName: fileName })
@@ -896,3 +912,121 @@ const trimHistory = async (mapsDir, key) => {
     await removeEntry(autoEntries[i])
   }
 }
+
+// ---------- 复习节点本地存储（<工作目录>/review.json + maps/<导图名>/review.json） ----------
+// 每张思维导图的复习节点数据直接保存在该导图文件夹的 review.json 中（与 data.smm 同目录），
+// 全局周期预设、默认周期以及未绑定导图的节点保存在工作目录根目录的 review.json 中。
+
+// 读取工作目录根目录下的全局 review.json
+export const readRootReviewFile = async () => {
+  if (!directoryHandle) return { ok: false, exists: false, data: null }
+  const fileHandle = await getFile(directoryHandle, REVIEW_FILE, false)
+  if (!fileHandle) return { ok: true, exists: false, data: null }
+  const data = await readJson(fileHandle)
+  return { ok: true, exists: true, data: data && typeof data === 'object' ? data : null }
+}
+
+// 保存工作目录根目录下的全局 review.json（含预设、默认周期及未绑定导图的节点）
+export const saveRootReviewFile = async payload => {
+  if (!directoryHandle) return { ok: false, message: '工作目录未打开' }
+  return enqueueWrite(async () => {
+    try {
+      const fileHandle = await getFile(directoryHandle, REVIEW_FILE, true)
+      if (!fileHandle) return { ok: false, message: '无法创建全局复习文件' }
+      const safePayload = toPersistableData(payload) || {
+        version: 2,
+        nodes: {}
+      }
+      await writeText(fileHandle, JSON.stringify(safePayload, null, 2))
+      return { ok: true }
+    } catch (e) {
+      emitError('保存全局复习配置失败：' + (e.message || e))
+      return { ok: false, message: e.message || '保存失败' }
+    }
+  })
+}
+
+// 读取某张导图文件夹下的 maps/<导图名>/review.json
+export const readMapReviewFile = async fileName => {
+  if (!directoryHandle) return { ok: false, exists: false, data: null }
+  const mapsDir = await resolveMapsDir(false)
+  if (!mapsDir) return { ok: false, exists: false, data: null }
+  const key = toMapKey(fileName)
+  if (!key) return { ok: false, exists: false, data: null }
+  const folder = await getSubDir(mapsDir, key, false)
+  if (!folder) return { ok: false, exists: false, data: null, key, fileName: ensureSmmExt(key) }
+  const fileHandle = await getFile(folder, REVIEW_FILE, false)
+  if (!fileHandle) {
+    return { ok: true, exists: false, data: null, key, fileName: ensureSmmExt(key) }
+  }
+  const data = await readJson(fileHandle)
+  return {
+    ok: true,
+    exists: true,
+    data: data && typeof data === 'object' ? data : null,
+    key,
+    fileName: ensureSmmExt(key)
+  }
+}
+
+// 保存某张导图文件夹下的 maps/<导图名>/review.json（与 data.smm 保存在同一文件夹）
+export const saveMapReviewFile = async (fileName, nodes, options = {}) => {
+  if (!directoryHandle) return { ok: false, message: '工作目录未打开' }
+  const key = toMapKey(fileName)
+  if (!key) return { ok: false, message: '导图名为空' }
+  const canonical = ensureSmmExt(key)
+  const createFolder = !!options.createFolder
+  return enqueueWrite(async () => {
+    try {
+      const mapsDir = await resolveMapsDir(createFolder)
+      if (!mapsDir) return { ok: false, message: '导图目录不存在' }
+      const folder = await getSubDir(mapsDir, key, createFolder)
+      if (!folder) return { ok: false, message: '导图文件夹不存在' }
+      const fileHandle = await getFile(folder, REVIEW_FILE, true)
+      if (!fileHandle) return { ok: false, message: '无法创建复习数据文件' }
+      const safeNodes = toPersistableData(nodes || {}) || {}
+      // 确保每个节点的 fileId / fileName 与所在导图文件夹一致
+      Object.keys(safeNodes).forEach(uid => {
+        if (safeNodes[uid] && typeof safeNodes[uid] === 'object') {
+          safeNodes[uid].fileId = canonical
+          safeNodes[uid].fileName = key
+        }
+      })
+      const payload = {
+        version: 1,
+        fileName: key,
+        fileId: canonical,
+        nodes: safeNodes
+      }
+      await writeText(fileHandle, JSON.stringify(payload, null, 2))
+      return { ok: true, fileName: canonical, key }
+    } catch (e) {
+      emitError('保存导图复习数据失败：' + (e.message || e))
+      return { ok: false, message: e.message || '保存失败' }
+    }
+  })
+}
+
+// 汇总读取工作目录下所有复习数据（根目录 review.json + 所有 maps/<导图名>/review.json）
+export const loadAllDirectoryReviews = async () => {
+  if (!directoryHandle) return { ok: false }
+  const rootRes = await readRootReviewFile()
+  const mapFiles = await listMapFiles()
+  const mapKeys = mapFiles.map(f => toMapKey(f)).filter(Boolean)
+  const mapReviews = {}
+  for (const key of mapKeys) {
+    const res = await readMapReviewFile(key)
+    mapReviews[key] = {
+      exists: !!res.exists,
+      data: res.data || null
+    }
+  }
+  return {
+    ok: true,
+    rootExists: !!rootRes.exists,
+    rootData: rootRes.data || null,
+    mapKeys,
+    mapReviews
+  }
+}
+

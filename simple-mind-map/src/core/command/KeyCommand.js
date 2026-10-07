@@ -1,4 +1,4 @@
-import { keyMap } from './keyMap'
+import { keyMap } from './keyMap.js'
 
 //  快捷按键、命令处理类
 export default class KeyCommand {
@@ -72,12 +72,14 @@ export default class KeyCommand {
   recoveryCheckInSvg() {
     const { enableShortcutOnlyWhenMouseInSvg } = this.mindMap.opt
     if (!enableShortcutOnlyWhenMouseInSvg) return
-    this.isStopCheckInSvg = true
+    this.isStopCheckInSvg = false
   }
 
   //  绑定事件
   bindEvent() {
     this.onKeydown = this.onKeydown.bind(this)
+    this.onWindowFocus = this.onWindowFocus.bind(this)
+    this.onWindowBlur = this.onWindowBlur.bind(this)
     // 只有当鼠标在画布内才响应快捷键
     this.mindMap.on('svg_mouseenter', () => {
       this.isInSvg = true
@@ -86,6 +88,8 @@ export default class KeyCommand {
       this.isInSvg = false
     })
     window.addEventListener('keydown', this.onKeydown)
+    window.addEventListener('focus', this.onWindowFocus)
+    window.addEventListener('blur', this.onWindowBlur)
     this.mindMap.on('beforeDestroy', () => {
       this.unBindEvent()
     })
@@ -94,6 +98,23 @@ export default class KeyCommand {
   // 解绑事件
   unBindEvent() {
     window.removeEventListener('keydown', this.onKeydown)
+    window.removeEventListener('focus', this.onWindowFocus)
+    window.removeEventListener('blur', this.onWindowBlur)
+  }
+
+  // 窗口重新获得焦点（如切屏回来、Alt+F4 取消回来）
+  onWindowFocus() {
+    // 若当前有激活节点或当前焦点在页面主区域，且不在外部 input/textarea 等表单中，恢复快捷键可用状态
+    const activeNodes = (this.mindMap.renderer && this.mindMap.renderer.activeNodeList) || []
+    if (activeNodes.length > 0) {
+      this.isInSvg = true
+    }
+  }
+
+  // 窗口失去焦点（切屏出去）
+  onWindowBlur() {
+    // 避免修饰键锁死在按下状态
+    this.isInSvg = false
   }
 
   // 根据事件目标判断是否响应快捷键事件
@@ -120,12 +141,15 @@ export default class KeyCommand {
       typeof customCheckEnableShortcut === 'function'
         ? customCheckEnableShortcut
         : this.defaultEnableCheck
-    if (!checkFn(e)) return
+    const activeNodes =
+      (this.mindMap.renderer && this.mindMap.renderer.activeNodeList) || []
+    const hasActiveNode = activeNodes.length > 0
     if (
       this.isPause ||
       (enableShortcutOnlyWhenMouseInSvg &&
         !this.isStopCheckInSvg &&
-        !this.isInSvg)
+        !this.isInSvg &&
+        !hasActiveNode)
     ) {
       return
     }

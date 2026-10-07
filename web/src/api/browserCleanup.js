@@ -121,12 +121,25 @@ const safeName = name =>
     .trim()
     .slice(0, 80) || '未命名'
 
-// 把浏览器导图写入目标文件夹的 maps/<name>/data.smm（可被目录模式直接打开）。
+const REVIEW_KEY = 'MIND_MAP_REVIEW_DATA'
+
+const readBrowserReviewData = () => {
+  try {
+    const raw = localStorage.getItem(REVIEW_KEY)
+    return raw ? JSON.parse(raw) : null
+  } catch (e) {
+    return null
+  }
+}
+
+// 把浏览器导图写入目标文件夹的 maps/<name>/data.smm（可被目录模式直接打开），
+// 并把属于该导图的复习节点写入同一文件夹的 maps/<name>/review.json。
 // 历史快照写入 maps/<name>/history/<time>_<manual|auto>.smm.json（沿用目录模式命名）。
-const writeMapToDir = async (rootDir, map) => {
+const writeMapToDir = async (rootDir, map, mapReviewNodes = {}) => {
   const mapsDir = await getSubDir(rootDir, 'maps', true)
   if (!mapsDir) throw new Error('无法在归档文件夹中创建 maps/')
-  const folder = await getSubDir(mapsDir, safeName(map.name), true)
+  const folderName = safeName(map.name)
+  const folder = await getSubDir(mapsDir, folderName, true)
   if (!folder) throw new Error('无法创建导图文件夹：' + map.name)
   const dataFile = await getFile(folder, 'data.smm', true)
   if (!dataFile) throw new Error('无法创建数据文件')
@@ -135,6 +148,36 @@ const writeMapToDir = async (rootDir, map) => {
       ? JSON.stringify(map.data)
       : JSON.stringify({ root: { data: { text: map.name }, children: [] } })
   await writeText(dataFile, content)
+
+  // 复习节点数据写入同一文件夹的 review.json
+  const reviewFile = await getFile(folder, 'review.json', true)
+  if (reviewFile) {
+    const normalizedNodes = {}
+    Object.keys(mapReviewNodes || {}).forEach(uid => {
+      const n = mapReviewNodes[uid]
+      if (n && typeof n === 'object') {
+        normalizedNodes[uid] = {
+          ...n,
+          uid: n.uid || uid,
+          fileId: folderName + '.smm',
+          fileName: folderName
+        }
+      }
+    })
+    await writeText(
+      reviewFile,
+      JSON.stringify(
+        {
+          version: 1,
+          fileName: folderName,
+          fileId: folderName + '.smm',
+          nodes: normalizedNodes
+        },
+        null,
+        2
+      )
+    )
+  }
 
   // 历史版本（可选）：快照为 { time, manual, data:{root,view} }
   const snapshots = map.snapshots || []
@@ -177,18 +220,61 @@ export const archiveBrowserMaps = async () => {
     return { ok: false, message: error && error.message || '选择归档文件夹失败' }
   }
   try {
+    const reviewData = readBrowserReviewData()
+    const allReviewNodes = (reviewData && reviewData.nodes) || {}
+    const assignedUids = new Set()
+
     for (const map of maps) {
-      await writeMapToDir(handle, map)
+      const folderName = safeName(map.name)
+      const mapNodes = {}
+      Object.keys(allReviewNodes).forEach(uid => {
+        const n = allReviewNodes[uid]
+        if (!n || typeof n !== 'object') return
+        if (n.fileId === map.id || n.fileName === map.name || n.fileName === folderName) {
+          mapNodes[uid] = n
+          assignedUids.add(uid)
+        }
+      })
+      await writeMapToDir(handle, map, mapNodes)
     }
+
+    // 根目录 review.json 保存全局预设及未绑定导图的节点
+    if (reviewData && typeof reviewData === 'object') {
+      const unassignedNodes = {}
+      Object.keys(allReviewNodes).forEach(uid => {
+        if (!assignedUids.has(uid) && allReviewNodes[uid]) {
+          unassignedNodes[uid] = allReviewNodes[uid]
+        }
+      })
+      const rootReviewFile = await getFile(handle, 'review.json', true)
+      if (rootReviewFile) {
+        await writeText(
+          rootReviewFile,
+          JSON.stringify(
+            {
+              version: reviewData.version || 5,
+              defaultCycles: reviewData.defaultCycles || [1, 3, 4],
+              activePresetId: reviewData.activePresetId || null,
+              presets: reviewData.presets || [],
+              migratedFromLocalStorage: true,
+              nodes: unassignedNodes
+            },
+            null,
+            2
+          )
+        )
+      }
+    }
+
     // 写入说明文件
     const readme = await getFile(handle, '浏览器存储备份说明.txt', true)
     if (readme) {
       await writeText(
         readme,
         [
-          '这是从“浏览器内置存储”归档导出的思维导图数据。',
+          '这是从“浏览器内置存储”归档导出的思维导图与复习数据。',
           '',
-          '结构与工作目录一致：maps/<导图名>/data.smm（含 images 相对引用与历史版本）。',
+          '结构与工作目录一致：maps/<导图名>/data.smm 与 maps/<导图名>/review.json（含 images 相对引用与历史版本）。',
           '如需继续使用，可用“选择工作目录”指向本文件夹，或把需要的 maps/<导图名>/ 复制到工作目录的 maps/ 下。',
           '',
           '归档时间：' + new Date().toLocaleString()

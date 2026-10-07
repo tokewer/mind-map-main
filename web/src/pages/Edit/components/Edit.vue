@@ -122,6 +122,20 @@ import {
 } from '@/api'
 import * as directoryStorage from '@/api/directoryStorage'
 import { addToTrash } from '@/review/trash'
+import {
+  syncReviewFromDirectory,
+  subscribeReviewSync,
+  getNode,
+  addReview,
+  removeReview,
+  toggleFocus,
+  rateReview,
+  getReviewData,
+  RATING
+} from '@/review'
+import { getReviewShortcuts } from '@/review/reviewShortcuts'
+import { triggerAutoGitHubSync } from '@/api/githubSync'
+import { getTextFromHtml } from 'simple-mind-map/src/utils/index'
 import Navigator from './Navigator.vue'
 import NodeImgPreview from './NodeImgPreview.vue'
 import SidebarTrigger from './SidebarTrigger.vue'
@@ -290,6 +304,13 @@ export default {
     // 否则定时器随页面一起消失，重开后会读到上一版内容。
     window.addEventListener('pagehide', this.onFlushBeforeLeave)
     document.addEventListener('visibilitychange', this.onVisibilityChange)
+    this._unsubscribeReviewSync = subscribeReviewSync(() => {
+      if (this.$store.state.isDirectoryMode) {
+        syncReviewFromDirectory()
+      } else {
+        this.$bus.$emit('review_changed')
+      }
+    })
     this.webTip()
     // 异步恢复上次的工作目录并打开上次文件
     this.restoreDirectoryMode()
@@ -316,6 +337,11 @@ export default {
     window.removeEventListener('beforeunload', this.onDirectoryBeforeUnload)
     window.removeEventListener('pagehide', this.onFlushBeforeLeave)
     document.removeEventListener('visibilitychange', this.onVisibilityChange)
+    if (this._unsubscribeReviewSync) {
+      this._unsubscribeReviewSync()
+      this._unsubscribeReviewSync = null
+    }
+    this.$bus.$off('review_shortcuts_changed', this.onReviewShortcutsChanged)
     this.unwatchDirectoryReauth()
     this.mindMap.destroy()
   },
@@ -350,7 +376,11 @@ export default {
     },
 
     onVisibilityChange() {
-      if (document.visibilityState === 'hidden') this.onFlushBeforeLeave()
+      if (document.visibilityState === 'hidden') {
+        this.onFlushBeforeLeave()
+      } else if (document.visibilityState === 'visible' && this.$store.state.isDirectoryMode) {
+        syncReviewFromDirectory()
+      }
     },
 
     // 关闭页面前：工作目录模式有未保存数据时提醒
@@ -400,6 +430,7 @@ export default {
         this.$bus.$emit('setData', res.data)
         applied = true
       }
+      this.$bus.$emit('review_changed')
       return applied
     },
 
@@ -507,6 +538,10 @@ export default {
     // 确保持久化数据与编辑器运行时对象解耦、始终可 JSON 序列化。
     onDataChange(data) {
       storeData({ root: data ? copyRenderTree({}, data) : data })
+      triggerAutoGitHubSync(
+        () => (this.mindMap ? this.mindMap.getData(true) : null),
+        getReviewData
+      )
     },
 
     // 捕获节点删除，写入回收站
@@ -538,6 +573,10 @@ export default {
     // 手动保存
     manualSave() {
       storeData(this.mindMap.getData(true), true)
+      triggerAutoGitHubSync(
+        () => (this.mindMap ? this.mindMap.getData(true) : null),
+        getReviewData
+      )
     },
 
     // Shift+Enter：在当前节点上方插入同级节点
@@ -574,6 +613,179 @@ export default {
           this.mindMap.renderer.textEdit.show({ node: target })
         }
       })
+    },
+
+    // 注册复习快捷键
+    registerReviewShortcuts() {
+      if (!this.mindMap || !this.mindMap.keyCommand) return
+      // 清除旧的复习快捷键绑定
+      if (this._registeredReviewShortcuts && this._registeredReviewShortcuts.length) {
+        this._registeredReviewShortcuts.forEach(({ key, fn }) => {
+          this.mindMap.keyCommand.removeShortcut(key, fn)
+        })
+      }
+      this._registeredReviewShortcuts = []
+      const shortcuts = getReviewShortcuts()
+
+      // 1. 加入/移出复习
+      if (shortcuts.toggleReview) {
+        const fn = () => this.handleShortcutToggleReview()
+        this.mindMap.keyCommand.addShortcut(shortcuts.toggleReview, fn)
+        this._registeredReviewShortcuts.push({ key: shortcuts.toggleReview, fn })
+      }
+      // 2. 打开复习详情/管理弹窗
+      if (shortcuts.openReviewDialog) {
+        const fn = () => this.handleShortcutOpenReviewDialog()
+        this.mindMap.keyCommand.addShortcut(shortcuts.openReviewDialog, fn)
+        this._registeredReviewShortcuts.push({ key: shortcuts.openReviewDialog, fn })
+      }
+      // 3. 标记/取消重点
+      if (shortcuts.toggleFocus) {
+        const fn = () => this.handleShortcutToggleFocus()
+        this.mindMap.keyCommand.addShortcut(shortcuts.toggleFocus, fn)
+        this._registeredReviewShortcuts.push({ key: shortcuts.toggleFocus, fn })
+      }
+      // 4. 快捷评价：记得
+      if (shortcuts.quickRemember) {
+        const fn = () => this.handleShortcutQuickReview(RATING.REMEMBER)
+        this.mindMap.keyCommand.addShortcut(shortcuts.quickRemember, fn)
+        this._registeredReviewShortcuts.push({ key: shortcuts.quickRemember, fn })
+      }
+      // 5. 快捷评价：模糊
+      if (shortcuts.quickFuzzy) {
+        const fn = () => this.handleShortcutQuickReview(RATING.FUZZY)
+        this.mindMap.keyCommand.addShortcut(shortcuts.quickFuzzy, fn)
+        this._registeredReviewShortcuts.push({ key: shortcuts.quickFuzzy, fn })
+      }
+      // 6. 快捷评价：忘了
+      if (shortcuts.quickForgot) {
+        const fn = () => this.handleShortcutQuickReview(RATING.FORGOT)
+        this.mindMap.keyCommand.addShortcut(shortcuts.quickForgot, fn)
+        this._registeredReviewShortcuts.push({ key: shortcuts.quickForgot, fn })
+      }
+    },
+
+    onReviewShortcutsChanged() {
+      this.registerReviewShortcuts()
+    },
+
+    // 获取当前选中的单一常规节点
+    getSelectedRegularNode() {
+      if (!this.mindMap || !this.mindMap.renderer) return null
+      const activeList = this.mindMap.renderer.activeNodeList || []
+      if (activeList.length <= 0) return null
+      const node = activeList[0]
+      if (node.isGeneralization) return null
+      return node
+    },
+
+    // 快捷键：切换加入/移出复习
+    handleShortcutToggleReview() {
+      const node = this.getSelectedRegularNode()
+      if (!node) return
+      const text = getTextFromHtml(node.getData('text'))
+      const inReview = !!getNode(node.uid)
+      if (inReview) {
+        removeReview(node.uid)
+        this.$message.info(`已移出复习：${text}`)
+      } else {
+        const parentUid = node.parent && node.parent.uid ? node.parent.uid : ''
+        let path = ''
+        try {
+          const arr = []
+          let cur = node
+          while (cur) {
+            arr.unshift(getTextFromHtml(cur.getData('text')))
+            cur = cur.parent
+          }
+          path = arr.join('/')
+        } catch (e) {
+          path = ''
+        }
+        const identity = this.$store.state.isDirectoryMode
+          ? { fileId: this.$store.state.currentSmmFile, fileName: this.$store.state.currentSmmFile }
+          : { fileId: '', fileName: '' }
+        addReview({
+          uid: node.uid,
+          name: text,
+          path,
+          parentUid,
+          fileId: identity.fileId,
+          fileName: identity.fileName
+        })
+        this.$message.success(`已加入复习：${text}`)
+      }
+      this.$bus.$emit('review_data_change')
+    },
+
+    // 快捷键：打开复习弹窗
+    handleShortcutOpenReviewDialog() {
+      const node = this.getSelectedRegularNode()
+      if (!node) return
+      const text = getTextFromHtml(node.getData('text'))
+      const parentUid = node.parent && node.parent.uid ? node.parent.uid : ''
+      let path = ''
+      try {
+        const arr = []
+        let cur = node
+        while (cur) {
+          arr.unshift(getTextFromHtml(cur.getData('text')))
+          cur = cur.parent
+        }
+        path = arr.join('/')
+      } catch (e) {
+        path = ''
+      }
+      const identity = this.$store.state.isDirectoryMode
+        ? { fileId: this.$store.state.currentSmmFile, fileName: this.$store.state.currentSmmFile }
+        : { fileId: '', fileName: '' }
+      this.$bus.$emit('open_review_dialog', {
+        uid: node.uid,
+        name: text,
+        path,
+        parentUid,
+        fileId: identity.fileId,
+        fileName: identity.fileName
+      })
+    },
+
+    // 快捷键：切换重点
+    handleShortcutToggleFocus() {
+      const node = this.getSelectedRegularNode()
+      if (!node) return
+      const text = getTextFromHtml(node.getData('text'))
+      const identity = this.$store.state.isDirectoryMode
+        ? { fileId: this.$store.state.currentSmmFile, fileName: this.$store.state.currentSmmFile }
+        : { fileId: '', fileName: '' }
+      const nextStatus = toggleFocus(node.uid, {
+        name: text,
+        parentUid: node.parent && node.parent.uid ? node.parent.uid : '',
+        fileId: identity.fileId,
+        fileName: identity.fileName
+      })
+      this.$bus.$emit('review_data_change')
+      this.$message.success(nextStatus ? '⭐️ 已标记为重点' : '已取消重点')
+    },
+
+    // 快捷键：快速评价
+    handleShortcutQuickReview(rating) {
+      const node = this.getSelectedRegularNode()
+      if (!node) return
+      const inReview = !!getNode(node.uid)
+      if (!inReview) {
+        this.$message.warning('该节点尚未加入复习，请先加入复习（默认快捷键 Alt + R）')
+        return
+      }
+      const map = {
+        [RATING.REMEMBER]: '记得',
+        [RATING.FUZZY]: '模糊',
+        [RATING.FORGOT]: '忘了'
+      }
+      const result = rateReview(node.uid, rating)
+      if (result) {
+        this.$message.success(`已评价：${map[rating]}，下次复习：${result.nextReview || '已掌握'}`)
+        this.$bus.$emit('review_data_change')
+      }
     },
 
     // 初始化
@@ -707,6 +919,9 @@ export default {
       this.mindMap.keyCommand.addShortcut('Shift+Enter', () => {
         this.insertSiblingAbove()
       })
+      // 注册复习功能动态快捷键
+      this.registerReviewShortcuts()
+      this.$bus.$on('review_shortcuts_changed', this.onReviewShortcutsChanged)
       // 转发事件
       ;[
         'node_active',

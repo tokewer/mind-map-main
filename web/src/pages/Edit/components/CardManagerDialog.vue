@@ -89,6 +89,9 @@ export default {
       uid: '',
       nodeName: '',
       nodePath: '',
+      parentUid: '',
+      fileId: '',
+      fileName: '',
       cards: [],
       editingIndex: -1,
       form: { type: 'qa', front: '', back: '', hint: '' }
@@ -113,6 +116,9 @@ export default {
       this.uid = info && info.uid ? info.uid : ''
       this.nodeName = (info && info.name) || ''
       this.nodePath = (info && info.path) || ''
+      this.parentUid = (info && info.parentUid) || ''
+      this.fileId = (info && info.fileId) || ''
+      this.fileName = (info && info.fileName) || ''
       const node = this.uid ? getNode(this.uid) : null
       this.cards = node ? node.cards || [] : []
       this.editingIndex = -1
@@ -137,7 +143,17 @@ export default {
         return
       }
       if (this.editingIndex === -1) {
-        addCard(this.uid, { ...this.form })
+        addCard(
+          this.uid,
+          { ...this.form },
+          {
+            name: this.nodeName,
+            path: this.nodePath,
+            parentUid: this.parentUid,
+            fileId: this.fileId,
+            fileName: this.fileName
+          }
+        )
         this.$message.success('已添加卡片')
       } else {
         const cardId = this.cards[this.editingIndex].id

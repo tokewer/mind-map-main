@@ -684,6 +684,7 @@ export default {
       }
       const node = this.node
       const text = getTextFromHtml(node.getData('text'))
+      const parentUid = node.parent && node.parent.uid ? node.parent.uid : ''
       let path = ''
       try {
         const arr = []
@@ -696,10 +697,14 @@ export default {
       } catch (error) {
         path = ''
       }
+      const identity = getCurrentMapIdentity()
       this.$bus.$emit('open_card_manager', {
         uid: node.uid,
         name: text,
-        path
+        path,
+        parentUid,
+        fileId: identity.fileId,
+        fileName: identity.fileName
       })
       this.hide()
     }

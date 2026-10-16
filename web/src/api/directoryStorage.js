@@ -298,7 +298,7 @@ export const toPersistableData = data => {
     // 退化为仅保留 { layout, root, theme, view } 纯字段的宽拷贝。
     const pick = {}
     if (data && typeof data === 'object') {
-      ;['layout', 'root', 'theme', 'view'].forEach(k => {
+      ['layout', 'root', 'theme', 'view'].forEach(k => {
         if (data[k] !== undefined) pick[k] = data[k]
       })
     }
@@ -517,7 +517,7 @@ const migrateLegacyMapFile = async (mapsDir, fileName) => {
         let m
         while ((m = re.exec(textNode))) refs.add(m[0])
       }
-      ;(root.children || []).forEach(walk)
+      (root.children || []).forEach(walk)
     }
     walk(data.root)
   }

@@ -33,68 +33,146 @@
     <el-tabs v-model="activeTab" class="mainTabs">
       <!-- 今日复习 -->
       <el-tab-pane label="今日复习" name="today">
-        <!-- 复习模式：卡片 + 三档评价 -->
+        <!-- 复习模式：完整卡片拷问流程（提问 -> 回忆 -> 揭示答案 -> 四级评价 -> 结束统计） -->
         <div v-if="reviewMode && currentReview" class="reviewMode" :class="{ dark: isDark }">
           <div class="reviewHeader">
             <div class="progressWrap">
               <el-progress :percentage="reviewProgress()" :stroke-width="8" :show-text="false"></el-progress>
-              <span class="progressText">{{ reviewIndex + 1 }} / {{ reviewQueue.length }}</span>
+              <span class="progressText">第 {{ reviewIndex + 1 }} 项 / 共 {{ reviewQueue.length }} 项</span>
             </div>
-            <el-button size="small" @click="exitReview">退出复习</el-button>
+            <div class="headerOps">
+              <el-button size="mini" type="info" plain @click="openShortcutDialog">快捷键 (Alt + ?)</el-button>
+              <el-button size="small" @click="exitReview">退出复习 (Esc)</el-button>
+            </div>
           </div>
 
           <div class="reviewCardWrap">
             <div class="reviewNodeInfo">
               <span class="nodeName">{{ currentReview.name }}</span>
-              <span class="nodePath">{{ currentReview.path }}</span>
+              <span class="nodePath" v-if="currentReview.path">{{ currentReview.path }}</span>
               <span class="nodeMeta">
                 已复习 {{ currentReview.times }} 次 · 错误 {{ currentReview.errorCount || 0 }} 次
               </span>
               <span class="nodeTags" v-if="currentReview.tags && currentReview.tags.length">
                 <el-tag size="mini" v-for="t in currentReview.tags" :key="t" type="info">{{ t }}</el-tag>
               </span>
+              <!-- 多卡片切换提示与按钮 -->
+              <div class="cardIndexBar" v-if="currentCards.length > 1">
+                <span class="cardCountText">卡片 {{ currentCardIndex + 1 }} / {{ currentCards.length }}</span>
+                <el-button-group>
+                  <el-button size="mini" icon="el-icon-arrow-left" :disabled="currentCardIndex <= 0" @click="prevCard">上一张</el-button>
+                  <el-button size="mini" :disabled="currentCardIndex >= currentCards.length - 1" @click="nextCard">下一张<i class="el-icon-arrow-right el-icon--right"></i></el-button>
+                </el-button-group>
+              </div>
             </div>
 
-            <!-- 卡片翻面 -->
-            <div class="cardArea" @click="toggleAnswer">
+            <!-- 卡片交互区域 -->
+            <div class="cardArea" :class="{ 'is-revealed': showAnswer }" @click="toggleAnswer">
               <div class="cardFront">
-                <span class="cardType">{{ cardTypeText('qa') }}</span>
-                <div class="cardContent" v-if="currentCards.length > 0">
-                  <!-- 第一张卡片（当前用第一张演示） -->
-                  <div class="qaFront">{{ currentCards[0].front }}</div>
-                  <div class="qaHint" v-if="currentCards[0].hint">提示：{{ currentCards[0].hint }}</div>
+                <div class="cardTopBar">
+                  <span class="cardType">{{ cardTypeText(activeCard ? activeCard.type : 'qa') }}</span>
+                  <span class="stageBadge">{{ showAnswer ? '【答案面】' : '【正面 · 思考中】' }}</span>
+                </div>
+
+                <div class="cardContent" v-if="activeCard">
+                  <div class="qaFront">{{ activeCard.front }}</div>
+                  <div class="qaHint" v-if="activeCard.hint">💡 提示：{{ activeCard.hint }}</div>
                 </div>
                 <div class="cardContent" v-else>
                   <div class="qaFront">回忆：{{ currentReview.name }}</div>
-                  <div class="qaHint">（该节点还没有复习卡片，先回忆知识点内容）</div>
+                  <div class="qaHint">（该节点暂未添加卡片，请根据知识点名称回忆全部内容）</div>
                 </div>
-                <div class="flipTip">{{ showAnswer ? '点击收起答案' : '点击显示答案' }}</div>
+
+                <div class="flipTip">
+                  <span v-if="!showAnswer">👉 点击或按 [Space / Enter] 显示答案</span>
+                  <span v-else>👈 点击或按 [Space] 收起答案</span>
+                </div>
               </div>
 
-              <div class="cardBack" v-if="showAnswer">
-                <div class="backLabel">答案</div>
-                <div class="backContent" v-if="currentCards.length > 0">
-                  <div class="qaBack">{{ currentCards[0].back }}</div>
+              <!-- 答案揭示面 -->
+              <transition name="el-zoom-in-top">
+                <div class="cardBack" v-if="showAnswer">
+                  <div class="backLabel">✅ 参考答案</div>
+                  <div class="backContent" v-if="activeCard">
+                    <div class="qaBack">{{ activeCard.back }}</div>
+                  </div>
+                  <div class="backContent" v-else>
+                    <div class="qaBack">（该节点暂无独立卡片，建议在下方或导图中添加复习卡片）</div>
+                  </div>
                 </div>
-                <div class="backContent" v-else>
-                  <div class="qaBack">（无卡片，可在节点详情中添加复习卡片）</div>
+              </transition>
+            </div>
+
+            <!-- 阶段控制：未揭示答案前明确提示先回忆；揭示答案后显示四级评价 -->
+            <div class="actionPanel">
+              <div v-if="!showAnswer" class="unrevealedBar">
+                <el-button type="primary" size="medium" icon="el-icon-view" @click="toggleAnswer">
+                  显示答案 (Space)
+                </el-button>
+                <div class="actionTip">请先在脑海中回忆答案，揭示答案后即可进行复习效果评价</div>
+              </div>
+
+              <div v-else class="revealedBar">
+                <div class="ratingBar">
+                  <el-button type="danger" size="medium" @click="rate(RATING.FORGOT)">
+                    😰 忘记 (1)
+                  </el-button>
+                  <el-button type="warning" size="medium" @click="rate(RATING.FUZZY)">
+                    🤔 模糊 (2)
+                  </el-button>
+                  <el-button type="success" size="medium" @click="rate(RATING.REMEMBER)">
+                    ✅ 记得 (3)
+                  </el-button>
+                  <el-button type="primary" size="medium" @click="rate(RATING.MASTERED)">
+                    🌟 熟练 (4)
+                  </el-button>
+                </div>
+                <div class="ratingTip">
+                  忘记=今天重练 · 模糊=减半复现 · 记得=推进一步 · 熟练=直接掌握
                 </div>
               </div>
             </div>
 
-            <!-- 三档评价 -->
-            <div class="ratingBar">
-              <el-button type="danger" size="medium" @click="rate(RATING.FORGOT)">
-                😰 忘记
-              </el-button>
-              <el-button type="warning" size="medium" @click="rate(RATING.FUZZY)">
-                🤔 模糊
-              </el-button>
-              <el-button type="success" size="medium" @click="rate(RATING.REMEMBER)">
-                ✅ 记得
-              </el-button>
+            <!-- 快捷键操作提示栏 -->
+            <div class="shortcutHelpBar">
+              <span class="helpItem"><b>Space</b>: {{ showAnswer ? '收起答案' : '显示答案' }}</span>
+              <span class="helpItem" v-if="currentCards.length > 1"><b>← / →</b>: 切换卡片</span>
+              <span class="helpItem" v-if="showAnswer"><b>1-4</b>: 快速评价</span>
+              <span class="helpItem"><b>Esc</b>: 退出复习</span>
             </div>
-            <div class="ratingTip">忘记=今天再复习 · 模糊=缩短间隔 · 记得=推进周期</div>
+          </div>
+        </div>
+
+        <!-- 复习完成总结界面 -->
+        <div v-else-if="reviewFinished" class="reviewFinishedWrap" :class="{ dark: isDark }">
+          <div class="finishedCard">
+            <div class="finishIcon">🎉</div>
+            <h3 class="finishTitle">本轮复习圆满完成！</h3>
+            <p class="finishDesc">温故而知新，知识记忆已根据艾宾浩斯曲线自动排期。</p>
+
+            <div class="finishStats">
+              <div class="fStatItem">
+                <div class="num">{{ finishSummary.total }}</div>
+                <div class="label">本次复习</div>
+              </div>
+              <div class="fStatItem">
+                <div class="num text-success">{{ finishSummary.remember }}</div>
+                <div class="label">记得/熟练</div>
+              </div>
+              <div class="fStatItem">
+                <div class="num text-warning">{{ finishSummary.fuzzy }}</div>
+                <div class="label">模糊</div>
+              </div>
+              <div class="fStatItem">
+                <div class="num text-danger">{{ finishSummary.forgot }}</div>
+                <div class="label">忘记</div>
+              </div>
+            </div>
+
+            <div class="finishOps">
+              <el-button type="primary" @click="closeFinishSummary">返回复习中心</el-button>
+              <el-button @click="goEdit">返回思维导图</el-button>
+            </div>
           </div>
         </div>
 
@@ -106,16 +184,19 @@
               <span>薄弱节点 <b>{{ weakListData.length }}</b> 项</span>
             </div>
             <div class="entryBtns">
-              <el-button type="primary" :disabled="dueList.length === 0" @click="startReview('due')">
-                开始复习（今日）
+              <el-button type="primary" :disabled="dueList.length === 0" icon="el-icon-video-play" @click="startReview('due')">
+                开始复习（今日 {{ dueList.length }}）
               </el-button>
-              <el-button type="warning" :disabled="weakListData.length === 0" @click="startReview('weak')">
-                复习薄弱项
+              <el-button type="warning" :disabled="weakListData.length === 0" icon="el-icon-aim" @click="startReview('weak')">
+                复习薄弱项 ({{ weakListData.length }})
               </el-button>
             </div>
           </div>
 
-          <div v-if="dueList.length === 0" class="emptyTip">今日没有待复习项，休息一下吧</div>
+          <div v-if="dueList.length === 0" class="emptyTip">
+            <div style="font-size: 28px; margin-bottom: 8px;">☕️</div>
+            今日没有待复习项，可以休息一下或复习薄弱节点
+          </div>
           <div class="fileGroup todayGroup" v-for="g in dueGroups" :key="g.key" :class="{ dark: isDark }">
             <div class="groupHeader">
               <span class="groupName">{{ g.fileName }}</span>
@@ -131,11 +212,16 @@
                   <span class="errorCount" v-if="item.errorCount">
                     <el-tag size="mini" type="danger">错 {{ item.errorCount }}</el-tag>
                   </span>
+                  <span class="cardsCount" v-if="item.cards && item.cards.length">
+                    <el-tag size="mini" type="info">{{ item.cards.length }} 张卡片</el-tag>
+                  </span>
                 </div>
               </div>
               <div class="taskOps">
+                <el-button size="mini" type="primary" plain @click="startSingleReview(item)">拷问复习</el-button>
+                <el-button size="mini" @click="onCards(item)">卡片</el-button>
                 <el-button size="mini" @click="onPostpone(item)">推迟 1 天</el-button>
-                <el-button size="mini" type="primary" @click="onComplete(item)">完成</el-button>
+                <el-button size="mini" type="success" plain @click="onComplete(item)">完成</el-button>
               </div>
             </div>
           </div>
@@ -275,6 +361,7 @@
                 </div>
               </div>
               <div class="rowOps">
+                <el-button size="mini" type="primary" plain @click="startSingleReview(item)">拷问</el-button>
                 <el-button size="mini" type="text" @click="onCards(item)">卡片</el-button>
                 <el-button size="mini" type="text" @click="onEdit(item)">设置</el-button>
                 <el-button
@@ -333,6 +420,8 @@
                 </div>
               </div>
               <div class="rowOps">
+                <el-button size="mini" type="warning" plain @click="startSingleReview(item)">拷问</el-button>
+                <el-button size="mini" type="text" @click="onCards(item)">卡片</el-button>
                 <el-button size="mini" type="text" @click="onReset(item)">重置</el-button>
                 <el-button size="mini" type="text" class="danger" @click="onRemove(item)">删除</el-button>
               </div>
@@ -502,6 +591,20 @@
             <div class="setTip">工作区文件包含全部导图、复习记录、卡片、历史版本和设置，可在其他浏览器打开。首次保存工作区后，当前会话中的编辑会自动保存到该文件。</div>
           </div>
           <div class="setGroup">
+            <div class="setLabel">复习功能快捷键</div>
+            <div class="setRow glowEnabledRow">
+              <div>
+                <span>启用复习全局快捷键</span>
+                <div class="setTip" style="margin-top: 4px;">开启后可在拷问页面、导图中使用键盘快速操作复习流程</div>
+              </div>
+              <el-switch v-model="shortcutConfig.enabled" @change="onToggleShortcutEnabled"></el-switch>
+            </div>
+            <div class="setRow" style="margin-top: 10px;">
+              <el-button size="small" type="primary" plain @click="openShortcutDialog">管理快捷键绑定</el-button>
+              <el-button size="small" @click="onResetShortcuts">恢复默认按键</el-button>
+            </div>
+          </div>
+          <div class="setGroup">
             <div class="setLabel">复习卡片 Markdown</div>
             <div class="setRow">
               <el-button size="small" @click="onExportCards">导出卡片 Markdown</el-button>
@@ -522,7 +625,85 @@
       </el-tab-pane>
     </el-tabs>
 
-    // 编辑周期/名称/标签 对话框
+    <!-- 快捷键配置对话框 -->
+    <el-dialog
+      title="复习快捷键设置"
+      :visible.sync="shortcutDialogVisible"
+      width="680px"
+      append-to-body
+    >
+      <div class="shortcutConfigBox">
+        <div class="scTopBar">
+          <div class="scStatus">
+            <span>全局快捷键总开关：</span>
+            <el-switch v-model="shortcutConfig.enabled" @change="onToggleShortcutEnabled"></el-switch>
+            <span class="scStatusText">{{ shortcutConfig.enabled ? '已开启' : '已关闭（所有快捷键不触发）' }}</span>
+          </div>
+          <el-button size="mini" type="text" @click="onResetShortcuts">恢复全部默认值</el-button>
+        </div>
+        <div class="scTip">
+          💡 点击按键按钮后按下键盘组合键（如 Space、1、Alt + R），松开即可录制保存；按 Esc 取消录制。
+        </div>
+
+        <div class="scTable">
+          <div class="scHeader">
+            <span class="colAction">功能操作</span>
+            <span class="colScope">生效范围</span>
+            <span class="colBinding">当前绑定快捷键</span>
+            <span class="colOps">操作</span>
+          </div>
+          <div
+            class="scRow"
+            v-for="item in shortcutActionDefs"
+            :key="item.key"
+          >
+            <div class="colAction">
+              <span class="actionIcon">{{ item.icon }}</span>
+              <div class="actionInfo">
+                <div class="actionName">{{ item.name }}</div>
+                <div class="actionDesc">{{ item.desc }}</div>
+              </div>
+            </div>
+            <div class="colScope">
+              <el-tag size="mini" :type="item.scope === 'quiz' ? 'warning' : item.scope === 'map' ? 'success' : 'info'">
+                {{ item.scope === 'quiz' ? '拷问页面' : item.scope === 'map' ? '思维导图' : '全局可用' }}
+              </el-tag>
+            </div>
+            <div class="colBinding">
+              <el-button
+                size="mini"
+                :type="recordingKey === item.key ? 'danger' : 'primary'"
+                plain
+                class="scRecordBtn"
+                @keydown.native.prevent="onRecordKey($event, item.key)"
+                @blur="onBlurRecord(item.key)"
+                @click="startRecord(item.key)"
+              >
+                {{ recordingKey === item.key ? (tempRecorded || '按下按键...') : (shortcutConfig.shortcuts[item.key] || '未设置') }}
+              </el-button>
+            </div>
+            <div class="colOps">
+              <el-button
+                size="mini"
+                type="text"
+                @click="onResetSingleShortcut(item.key)"
+                :disabled="shortcutConfig.shortcuts[item.key] === item.defaultKey"
+              >
+                恢复默认
+              </el-button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div slot="footer" class="dialog-footer">
+        <el-button size="small" type="primary" @click="shortcutDialogVisible = false">完成</el-button>
+      </div>
+    </el-dialog>
+
+    <!-- 卡片管理对话框 (复用 Edit 组件) -->
+    <CardManagerDialog></CardManagerDialog>
+
+    <!-- 编辑周期/名称/标签 对话框 -->
     <el-dialog title="复习设置" :visible.sync="editVisible" width="420px" append-to-body>
       <div v-if="editing" class="editDialog">
         <el-form label-width="80px" size="small">
@@ -659,6 +840,17 @@ import {
   flushReviewWrites,
   subscribeReviewSync
 } from '@/review'
+import CardManagerDialog from '@/pages/Edit/components/CardManagerDialog.vue'
+import {
+  REVIEW_ACTION_DEFS,
+  getReviewShortcutConfig,
+  saveReviewShortcutConfig,
+  resetReviewShortcuts,
+  setReviewShortcutsEnabled,
+  formatKeyEventToShortcut,
+  checkShortcutConflict,
+  reviewShortcutDispatcher
+} from '@/review/reviewShortcuts'
 import { getFileList, getLocalConfig, readFileData, resumeDirectoryMode } from '@/api'
 import * as directoryStorage from '@/api/directoryStorage'
 import { buildParentMap, buildReviewGroups, getReviewFileKey, toDirectorySubjectList } from '@/review/tree'
@@ -699,6 +891,9 @@ const CARD_TYPE_MAP = {
 
 export default {
   name: 'ReviewPage',
+  components: {
+    CardManagerDialog
+  },
   data() {
     return {
       activeTab: 'today',
@@ -744,8 +939,24 @@ export default {
       reviewMode: false,
       reviewQueue: [], // 当前待复习队列
       reviewIndex: 0, // 当前复习项下标
+      currentCardIndex: 0, // 当前卡片下标
       showAnswer: false, // 是否显示答案
-      reviewFilter: 'due' // due=今日到期 weak=薄弱
+      reviewFilter: 'due', // due=今日到期 weak=薄弱 single=单个节点
+      isSubmittingRate: false, // 防连点锁
+      // 完成统计
+      reviewFinished: false,
+      finishSummary: {
+        total: 0,
+        remember: 0,
+        fuzzy: 0,
+        forgot: 0
+      },
+      // 快捷键设置弹窗与状态
+      shortcutDialogVisible: false,
+      shortcutConfig: getReviewShortcutConfig(),
+      shortcutActionDefs: REVIEW_ACTION_DEFS,
+      recordingKey: null,
+      tempRecorded: ''
     }
   },
   computed: {
@@ -880,6 +1091,13 @@ export default {
       if (!cur) return []
       return cur.cards || []
     },
+    // 当前正在展示的卡片
+    activeCard() {
+      const cards = this.currentCards
+      if (!cards.length) return null
+      const idx = Math.max(0, Math.min(this.currentCardIndex, cards.length - 1))
+      return cards[idx] || null
+    },
     cardTypeText() {
       return type => CARD_TYPE_MAP[type] || type || '问答'
     },
@@ -927,6 +1145,8 @@ export default {
     })
     window.addEventListener('pagehide', this.onFlushBeforeLeave)
     document.addEventListener('visibilitychange', this.onVisibilityChange)
+    this.initReviewShortcuts()
+    reviewShortcutDispatcher.setScope('review_page')
   },
   beforeDestroy() {
     this.$bus.$off('review_data_change', this.refresh)
@@ -940,6 +1160,11 @@ export default {
     window.removeEventListener('pagehide', this.onFlushBeforeLeave)
     document.removeEventListener('visibilitychange', this.onVisibilityChange)
     this.unwatchDirectoryReauth()
+    if (this._windowKeydownHandler) {
+      window.removeEventListener('keydown', this._windowKeydownHandler)
+      this._windowKeydownHandler = null
+    }
+    reviewShortcutDispatcher.setScope('none')
   },
   methods: {
     ...mapMutations(['setLocalConfig']),
@@ -1139,48 +1364,298 @@ export default {
       this.afterChange()
     },
     // ---------- 复习模式 ----------
+    // ---------- 复习拷问模式 ----------
+    // 启动多节点复习（今日或薄弱）
     startReview(type) {
       this.reviewFilter = type || 'due'
-      this.reviewQueue = (type === 'weak' ? this.weakListData : this.dueList).slice()
+      const queue = (type === 'weak' ? this.weakListData : this.dueList).slice()
+      if (!queue.length) {
+        this.$message.info(type === 'weak' ? '当前没有薄弱节点需要复习' : '今日没有待复习项目')
+        return
+      }
+      this.reviewQueue = queue
       this.reviewIndex = 0
+      this.currentCardIndex = 0
       this.showAnswer = false
       this.reviewMode = true
+      this.reviewFinished = false
+      this.finishSummary = {
+        total: 0,
+        remember: 0,
+        fuzzy: 0,
+        forgot: 0
+      }
+      reviewShortcutDispatcher.setScope('quiz')
     },
+
+    // 启动单个节点的拷问复习（从列表卡片/行直接进入）
+    startSingleReview(item) {
+      if (!item) return
+      this.reviewFilter = 'single'
+      this.reviewQueue = [item]
+      this.reviewIndex = 0
+      this.currentCardIndex = 0
+      this.showAnswer = false
+      this.reviewMode = true
+      this.reviewFinished = false
+      this.finishSummary = {
+        total: 0,
+        remember: 0,
+        fuzzy: 0,
+        forgot: 0
+      }
+      reviewShortcutDispatcher.setScope('quiz')
+    },
+
+    // 退出复习
     exitReview() {
       this.reviewMode = false
       this.reviewQueue = []
+      this.reviewIndex = 0
+      this.currentCardIndex = 0
       this.showAnswer = false
+      reviewShortcutDispatcher.setScope('review_page')
       this.afterChange()
     },
+
+    // 切换/显示/隐藏答案
     toggleAnswer() {
       this.showAnswer = !this.showAnswer
     },
-    // 三档评价
-    rate(rating) {
-      const cur = this.currentReview
-      if (!cur) return
-      rateReview(cur.uid, rating)
-      this.showAnswer = false
-      // 下一项
-      this.reviewIndex += 1
-      if (this.reviewIndex >= this.reviewQueue.length) {
-        this.$message.success('本轮复习完成！')
-        this.exitReview()
-      } else {
-        this.$bus.$emit('review_data_change')
+
+    // 多卡片切换：上一张
+    prevCard() {
+      if (this.currentCardIndex > 0) {
+        this.currentCardIndex -= 1
+        this.showAnswer = false
       }
     },
-    ratingText(r) {
-      return {
-        [RATING.FORGOT]: '忘记',
-        [RATING.FUZZY]: '模糊',
-        [RATING.REMEMBER]: '记得'
-      }[r] || r
+
+    // 多卡片切换：下一张
+    nextCard() {
+      if (this.currentCardIndex < this.currentCards.length - 1) {
+        this.currentCardIndex += 1
+        this.showAnswer = false
+      }
     },
+
+    // 四级评价提交 (忘记、模糊、记得、熟练)
+    rate(rating) {
+      if (this.isSubmittingRate) return
+      if (!this.showAnswer) {
+        this.$message.warning('请先显示答案，回忆核对后再提交评价')
+        return
+      }
+      const cur = this.currentReview
+      if (!cur) return
+
+      this.isSubmittingRate = true
+      try {
+        rateReview(cur.uid, rating)
+
+        // 累计本轮统计
+        this.finishSummary.total += 1
+        if (rating === RATING.FORGOT) {
+          this.finishSummary.forgot += 1
+        } else if (rating === RATING.FUZZY) {
+          this.finishSummary.fuzzy += 1
+        } else {
+          this.finishSummary.remember += 1
+        }
+
+        this.showAnswer = false
+        this.currentCardIndex = 0
+
+        // 下一项
+        this.reviewIndex += 1
+        if (this.reviewIndex >= this.reviewQueue.length) {
+          // 本轮完成
+          this.reviewMode = false
+          this.reviewFinished = true
+          this.reviewQueue = []
+          reviewShortcutDispatcher.setScope('review_page')
+          this.afterChange()
+        } else {
+          this.afterChange()
+        }
+      } finally {
+        setTimeout(() => {
+          this.isSubmittingRate = false
+        }, 150)
+      }
+    },
+
+    closeFinishSummary() {
+      this.reviewFinished = false
+      this.afterChange()
+    },
+
     // 复习进度百分比
     reviewProgress() {
       if (!this.reviewQueue.length) return 0
       return Math.round((this.reviewIndex / this.reviewQueue.length) * 100)
+    },
+
+    // ---------- 快捷键系统设置与调度 ----------
+    initReviewShortcuts() {
+      // 注册拷问页面的快捷键动作
+      reviewShortcutDispatcher.register('quiz', 'showAnswer', () => {
+        if (this.reviewMode && this.currentReview) {
+          this.toggleAnswer()
+        }
+      })
+      reviewShortcutDispatcher.register('quiz', 'prevCard', () => {
+        if (this.reviewMode && this.currentReview) {
+          this.prevCard()
+        }
+      })
+      reviewShortcutDispatcher.register('quiz', 'nextCard', () => {
+        if (this.reviewMode && this.currentReview) {
+          this.nextCard()
+        }
+      })
+      reviewShortcutDispatcher.register('quiz', 'rateForgot', () => {
+        if (this.reviewMode && this.currentReview && this.showAnswer) {
+          this.rate(RATING.FORGOT)
+        }
+      })
+      reviewShortcutDispatcher.register('quiz', 'rateFuzzy', () => {
+        if (this.reviewMode && this.currentReview && this.showAnswer) {
+          this.rate(RATING.FUZZY)
+        }
+      })
+      reviewShortcutDispatcher.register('quiz', 'rateRemember', () => {
+        if (this.reviewMode && this.currentReview && this.showAnswer) {
+          this.rate(RATING.REMEMBER)
+        }
+      })
+      reviewShortcutDispatcher.register('quiz', 'rateMastered', () => {
+        if (this.reviewMode && this.currentReview && this.showAnswer) {
+          this.rate(RATING.MASTERED)
+        }
+      })
+      reviewShortcutDispatcher.register('quiz', 'exitQuiz', () => {
+        if (this.reviewMode) {
+          this.exitReview()
+        }
+      })
+
+      // 全局动作：进入今日复习
+      reviewShortcutDispatcher.register('global', 'openQuiz', () => {
+        if (!this.reviewMode && this.dueList.length > 0) {
+          this.startReview('due')
+          this.$message.success('已通过快捷键启动今日复习拷问')
+        }
+      })
+
+      // 绑定 Alt + ? 打开快捷键配置
+      this._windowKeydownHandler = e => {
+        if (e.altKey && (e.key === '?' || e.key === '/' || e.keyCode === 191)) {
+          e.preventDefault()
+          this.openShortcutDialog()
+        }
+      }
+      window.addEventListener('keydown', this._windowKeydownHandler)
+    },
+
+    openShortcutDialog() {
+      this.shortcutConfig = getReviewShortcutConfig()
+      this.recordingKey = null
+      this.tempRecorded = ''
+      this.shortcutDialogVisible = true
+    },
+
+    onToggleShortcutEnabled(val) {
+      this.shortcutConfig = setReviewShortcutsEnabled(val)
+      this.$bus.$emit('review_shortcuts_changed', this.shortcutConfig.shortcuts)
+      this.$message.success(val ? '复习快捷键已全局开启' : '复习快捷键已全局关闭')
+    },
+
+    startRecord(key) {
+      this.recordingKey = key
+      this.tempRecorded = ''
+      reviewShortcutDispatcher.setRecording(true)
+    },
+
+    onBlurRecord(key) {
+      if (this.recordingKey === key) {
+        this.recordingKey = null
+        this.tempRecorded = ''
+        reviewShortcutDispatcher.setRecording(false)
+      }
+    },
+
+    onRecordKey(e, key) {
+      // Esc 取消录制
+      if (e.keyCode === 27) {
+        this.recordingKey = null
+        this.tempRecorded = ''
+        reviewShortcutDispatcher.setRecording(false)
+        return
+      }
+      const formatted = formatKeyEventToShortcut(e)
+      this.tempRecorded = formatted
+
+      // 如果按下了实际按键（非单纯修饰键）
+      if (![16, 17, 18, 91, 93, 224].includes(e.keyCode)) {
+        if (formatted) {
+          // 冲突检测
+          const conflict = checkShortcutConflict(key, formatted, this.shortcutConfig.shortcuts)
+          if (conflict.hasConflict) {
+            if (conflict.type === 'browser') {
+              this.$message.warning(conflict.message)
+            } else {
+              this.$message.error(conflict.message)
+              this.recordingKey = null
+              this.tempRecorded = ''
+              reviewShortcutDispatcher.setRecording(false)
+              return
+            }
+          }
+
+          const nextShortcuts = {
+            ...this.shortcutConfig.shortcuts,
+            [key]: formatted
+          }
+          this.shortcutConfig = saveReviewShortcutConfig({
+            enabled: this.shortcutConfig.enabled,
+            shortcuts: nextShortcuts
+          })
+          this.$bus.$emit('review_shortcuts_changed', this.shortcutConfig.shortcuts)
+          this.$message.success(`已设置「${formatted}」`)
+        }
+        this.recordingKey = null
+        this.tempRecorded = ''
+        reviewShortcutDispatcher.setRecording(false)
+      }
+    },
+
+    onResetShortcuts() {
+      this.$confirm('确定将所有复习快捷键恢复为默认键位吗？', '恢复默认快捷键', {
+        confirmButtonText: '恢复',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }).then(() => {
+        const defaults = resetReviewShortcuts()
+        this.shortcutConfig = getReviewShortcutConfig()
+        this.$bus.$emit('review_shortcuts_changed', defaults)
+        this.$message.success('已恢复全部默认复习快捷键')
+      }).catch(() => {})
+    },
+
+    onResetSingleShortcut(key) {
+      const def = REVIEW_ACTION_DEFS.find(d => d.key === key)
+      if (!def) return
+      const nextShortcuts = {
+        ...this.shortcutConfig.shortcuts,
+        [key]: def.defaultKey
+      }
+      this.shortcutConfig = saveReviewShortcutConfig({
+        enabled: this.shortcutConfig.enabled,
+        shortcuts: nextShortcuts
+      })
+      this.$bus.$emit('review_shortcuts_changed', this.shortcutConfig.shortcuts)
+      this.$message.success(`「${def.name}」已恢复为默认键位：${def.defaultKey}`)
     },
     onReset(item) {
       resetReview(item.uid)
@@ -1631,6 +2106,19 @@ export default {
           border-color: #409eff;
         }
 
+        .cardTopBar {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 12px;
+
+          .stageBadge {
+            font-size: 12px;
+            font-weight: 600;
+            color: #e6a23c;
+          }
+        }
+
         .cardFront {
           .cardType {
             display: inline-block;
@@ -1639,7 +2127,6 @@ export default {
             background: #ecf5ff;
             border-radius: 3px;
             padding: 2px 8px;
-            margin-bottom: 10px;
           }
 
           .cardContent {
@@ -1687,22 +2174,269 @@ export default {
         }
       }
 
-      .ratingBar {
-        display: flex;
-        justify-content: center;
-        gap: 14px;
+      .actionPanel {
+        margin-top: 16px;
+        text-align: center;
 
-        .el-button {
-          min-width: 110px;
-          font-size: 15px;
+        .unrevealedBar {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          gap: 10px;
+
+          .actionTip {
+            font-size: 13px;
+            color: #909399;
+          }
+        }
+
+        .revealedBar {
+          .ratingBar {
+            display: flex;
+            justify-content: center;
+            gap: 14px;
+            flex-wrap: wrap;
+
+            .el-button {
+              min-width: 110px;
+              font-size: 14px;
+              font-weight: 600;
+            }
+          }
+
+          .ratingTip {
+            margin-top: 10px;
+            text-align: center;
+            font-size: 12px;
+            color: #909399;
+          }
         }
       }
 
-      .ratingTip {
-        margin-top: 10px;
-        text-align: center;
+      .shortcutHelpBar {
+        margin-top: 24px;
+        padding-top: 14px;
+        border-top: 1px dashed #ebeef5;
+        display: flex;
+        justify-content: center;
+        gap: 20px;
+        flex-wrap: wrap;
         font-size: 12px;
         color: #909399;
+
+        .helpItem {
+          b {
+            color: #409eff;
+            background: #ecf5ff;
+            padding: 1px 6px;
+            border-radius: 3px;
+            margin-right: 4px;
+          }
+        }
+      }
+    }
+  }
+
+  // 复习完成统计卡片
+  .reviewFinishedWrap {
+    display: flex;
+    justify-content: center;
+    padding: 40px 0;
+
+    .finishedCard {
+      background: #fff;
+      border-radius: 12px;
+      padding: 36px 40px;
+      text-align: center;
+      max-width: 520px;
+      width: 100%;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+
+      .finishIcon {
+        font-size: 48px;
+        margin-bottom: 12px;
+      }
+
+      .finishTitle {
+        font-size: 22px;
+        font-weight: 700;
+        margin: 0 0 8px;
+        color: #303133;
+      }
+
+      .finishDesc {
+        font-size: 14px;
+        color: #909399;
+        margin: 0 0 24px;
+      }
+
+      .finishStats {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 12px;
+        background: #f8fafc;
+        border-radius: 8px;
+        padding: 16px 8px;
+        margin-bottom: 28px;
+
+        .fStatItem {
+          .num {
+            font-size: 22px;
+            font-weight: 700;
+            color: #409eff;
+
+            &.text-success {
+              color: #67c23a;
+            }
+            &.text-warning {
+              color: #e6a23c;
+            }
+            &.text-danger {
+              color: #f56c6c;
+            }
+          }
+
+          .label {
+            margin-top: 4px;
+            font-size: 12px;
+            color: #909399;
+          }
+        }
+      }
+
+      .finishOps {
+        display: flex;
+        justify-content: center;
+        gap: 16px;
+      }
+    }
+
+    &.dark {
+      .finishedCard {
+        background: #363b3f;
+
+        .finishTitle {
+          color: #fff;
+        }
+
+        .finishStats {
+          background: #2b2f33;
+        }
+      }
+    }
+  }
+
+  // 快捷键配置对话框
+  .shortcutConfigBox {
+    .scTopBar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-bottom: 12px;
+      border-bottom: 1px solid #ebeef5;
+      margin-bottom: 12px;
+
+      .scStatus {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 14px;
+        font-weight: 600;
+
+        .scStatusText {
+          font-size: 13px;
+          color: #909399;
+          font-weight: normal;
+        }
+      }
+    }
+
+    .scTip {
+      font-size: 12px;
+      color: #909399;
+      background: #f4f4f5;
+      padding: 8px 12px;
+      border-radius: 4px;
+      margin-bottom: 14px;
+    }
+
+    .scTable {
+      border: 1px solid #ebeef5;
+      border-radius: 6px;
+      overflow: hidden;
+
+      .scHeader,
+      .scRow {
+        display: flex;
+        align-items: center;
+        padding: 10px 14px;
+      }
+
+      .scHeader {
+        background: #f5f7fa;
+        font-weight: 600;
+        font-size: 13px;
+        color: #606266;
+        border-bottom: 1px solid #ebeef5;
+      }
+
+      .scRow {
+        border-bottom: 1px solid #f0f2f5;
+
+        &:last-child {
+          border-bottom: none;
+        }
+
+        &:hover {
+          background: #fafafa;
+        }
+      }
+
+      .colAction {
+        flex: 2;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+
+        .actionIcon {
+          font-size: 18px;
+        }
+
+        .actionInfo {
+          .actionName {
+            font-weight: 600;
+            font-size: 13px;
+            color: #303133;
+          }
+
+          .actionDesc {
+            font-size: 12px;
+            color: #909399;
+            margin-top: 2px;
+          }
+        }
+      }
+
+      .colScope {
+        flex: 1;
+        text-align: center;
+      }
+
+      .colBinding {
+        flex: 1.5;
+        text-align: center;
+
+        .scRecordBtn {
+          min-width: 100px;
+          font-family: monospace;
+          font-size: 13px;
+          font-weight: 600;
+        }
+      }
+
+      .colOps {
+        flex: 1;
+        text-align: right;
       }
     }
   }

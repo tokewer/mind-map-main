@@ -133,7 +133,11 @@ import {
   getReviewData,
   RATING
 } from '@/review'
-import { getReviewShortcuts } from '@/review/reviewShortcuts'
+import {
+  getReviewShortcutConfig,
+  getReviewShortcuts,
+  reviewShortcutDispatcher
+} from '@/review/reviewShortcuts'
 import { triggerAutoGitHubSync } from '@/api/githubSync'
 import { getTextFromHtml } from 'simple-mind-map/src/utils/index'
 import Navigator from './Navigator.vue'
@@ -314,8 +318,10 @@ export default {
     this.webTip()
     // 异步恢复上次的工作目录并打开上次文件
     this.restoreDirectoryMode()
+    reviewShortcutDispatcher.setScope('map')
   },
   beforeDestroy() {
+    reviewShortcutDispatcher.setScope('none')
     this.$bus.$off('execCommand', this.execCommand)
     this.$bus.$off('paddingChange', this.onPaddingChange)
     this.$bus.$off('export', this.export)
@@ -625,7 +631,10 @@ export default {
         })
       }
       this._registeredReviewShortcuts = []
-      const shortcuts = getReviewShortcuts()
+      const config = getReviewShortcutConfig()
+      if (!config.enabled) return // 全局关闭快捷键时，不向思维导图注册任何复习快捷键
+
+      const shortcuts = config.shortcuts
 
       // 1. 加入/移出复习
       if (shortcuts.toggleReview) {
@@ -662,6 +671,20 @@ export default {
         const fn = () => this.handleShortcutQuickReview(RATING.FORGOT)
         this.mindMap.keyCommand.addShortcut(shortcuts.quickForgot, fn)
         this._registeredReviewShortcuts.push({ key: shortcuts.quickForgot, fn })
+      }
+      // 7. 快捷评价：熟练
+      if (shortcuts.quickMastered) {
+        const fn = () => this.handleShortcutQuickReview(RATING.MASTERED)
+        this.mindMap.keyCommand.addShortcut(shortcuts.quickMastered, fn)
+        this._registeredReviewShortcuts.push({ key: shortcuts.quickMastered, fn })
+      }
+      // 8. 打开复习中心/拷问
+      if (shortcuts.openQuiz) {
+        const fn = () => {
+          this.$router.push('/review')
+        }
+        this.mindMap.keyCommand.addShortcut(shortcuts.openQuiz, fn)
+        this._registeredReviewShortcuts.push({ key: shortcuts.openQuiz, fn })
       }
     },
 
@@ -777,6 +800,7 @@ export default {
         return
       }
       const map = {
+        [RATING.MASTERED]: '熟练',
         [RATING.REMEMBER]: '记得',
         [RATING.FUZZY]: '模糊',
         [RATING.FORGOT]: '忘了'

@@ -63,11 +63,12 @@ export const MASTERY_LEVELS = {
   mastered: '熟练'
 }
 
-// 三档评价
+// 复习评价等级
 export const RATING = {
   FORGOT: 'forgot', // 忘记 → 错误+1，间隔重置
   FUZZY: 'fuzzy', // 模糊 → 错误+1，间隔减半
-  REMEMBER: 'remember' // 记得 → 推进周期
+  REMEMBER: 'remember', // 记得 → 推进周期
+  MASTERED: 'mastered' // 熟练 → 标记为已掌握（或直接跳跃推进）
 }
 
 // 复习频率：影响周期间隔倍率
@@ -417,7 +418,7 @@ export const syncReviewFromDirectory = async () => {
   }
 
   // 2. 加载各导图文件夹 maps/<导图名>/review.json 中的节点（以文件夹名为权威来源）
-  ;(loaded.mapKeys || []).forEach(key => {
+  (loaded.mapKeys || []).forEach(key => {
     const entry = loaded.mapReviews && loaded.mapReviews[key]
     const rawNodes = entry && entry.data && entry.data.nodes
     if (rawNodes && typeof rawNodes === 'object') {
@@ -675,7 +676,7 @@ export const getNode = uid => {
 }
 
 // 加入复习。cycles 可为数组或字符串；缺省用全局默认周期
-export const addReview = ({ uid, name, path = '', fileId = '', fileName = '', parentUid = '', cycles = null }) => {
+export const addReview = ({ uid, name, path = '', fileId = '', fileName = '', parentUid = '', cycles = null, cards = [] }) => {
   const data = load()
   const today = todayStr()
   let resolvedFileId = fileId
@@ -719,7 +720,7 @@ export const addReview = ({ uid, name, path = '', fileId = '', fileName = '', pa
     consecutiveSuccess: 0,
     lastRating: null,
     ratingHistory: [],
-    cards: [],
+    cards: Array.isArray(cards) ? cards.slice() : [],
     tags: [],
     frequency: 'normal',
     isFocus: false,
@@ -1001,6 +1002,13 @@ export const rateReview = (uid, rating) => {
     const halfDays = Math.max(1, Math.floor(base / 2))
     node.nextReview = addDays(today, halfDays)
     node.status = 'reviewing'
+  } else if (rating === RATING.MASTERED) {
+    // 熟练：直接标记为已掌握
+    node.consecutiveSuccess += 2
+    node.status = 'mastered'
+    node.mastery = 'mastered'
+    node.nextReview = null
+    node.nextCycleIndex = Math.max(0, node.cycles.length - 1)
   } else {
     // 记得：推进周期（考虑复习频率倍率）
     node.consecutiveSuccess += 1

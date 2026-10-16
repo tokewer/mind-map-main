@@ -355,7 +355,7 @@ export default {
     allTags() {
       const set = new Set()
       ;(this.allList || []).forEach(n => {
-        ;(n.tags || []).forEach(t => set.add(t))
+        (n.tags || []).forEach(t => set.add(t))
       })
       return [...set].sort()
     },

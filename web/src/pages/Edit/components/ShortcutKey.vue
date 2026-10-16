@@ -1,7 +1,7 @@
 <template>
   <Sidebar ref="sidebar" :title="$t('shortcutKey.title')">
     <div class="box" :class="{ isDark: isDark }">
-      <!-- 复习功能快捷键（支持自定义与录制） -->
+      <!-- 复习功能快捷键（支持自定义、全局开关与冲突检测） -->
       <div class="reviewShortcutSection">
         <div class="sectionHeader">
           <div class="title" style="margin: 16px 0 8px 0;">🎯 复习功能快捷键</div>
@@ -9,34 +9,69 @@
             type="text"
             size="mini"
             class="resetBtn"
-            @click="onResetReviewShortcuts"
-            title="恢复复习快捷键默认设置"
+            @click="onResetAllReviewShortcuts"
+            title="恢复全部复习快捷键默认设置"
           >
             恢复默认
           </el-button>
         </div>
-        <div class="tipText">
-          提示：点击“录制”后直接在键盘上按下组合键（如 Alt + R 或 Ctrl + Alt + 1），松开即可保存。
+
+        <!-- 全局开关 -->
+        <div class="globalToggleRow">
+          <span class="toggleLabel">全局复习快捷键开关：</span>
+          <el-switch
+            v-model="shortcutConfig.enabled"
+            @change="onToggleEnabled"
+            size="small"
+          ></el-switch>
+          <span class="toggleStatus">{{ shortcutConfig.enabled ? '已开启' : '已关闭' }}</span>
         </div>
-        <div class="list">
+
+        <div class="tipText" v-if="shortcutConfig.enabled">
+          提示：点击“按键按钮”后直接在键盘上按下组合键（如 Space、1、Alt + R），松开自动保存；按 Esc 取消。
+        </div>
+        <div class="tipText disabledTip" v-else>
+          ⚠️ 当前复习快捷键已全局关闭，所有复习快捷键均不响应，鼠标点击操作不受影响。
+        </div>
+
+        <div class="list" :class="{ disabledList: !shortcutConfig.enabled }">
           <div
             class="item customItem"
-            v-for="item in reviewShortcutDefList"
+            v-for="item in actionDefs"
             :key="item.key"
           >
             <span class="icon">{{ item.icon }}</span>
-            <div class="name" :title="item.desc">{{ item.name }}</div>
+            <div class="itemInfo">
+              <div class="nameRow">
+                <span class="name" :title="item.desc">{{ item.name }}</span>
+                <el-tag size="mini" :type="item.scope === 'quiz' ? 'warning' : item.scope === 'map' ? 'success' : 'info'">
+                  {{ item.scope === 'quiz' ? '拷问' : item.scope === 'map' ? '导图' : '全局' }}
+                </el-tag>
+              </div>
+              <div class="desc">{{ item.desc }}</div>
+            </div>
             <div class="actionBox">
               <el-button
                 size="mini"
                 :type="recordingKey === item.key ? 'danger' : 'primary'"
                 plain
+                :disabled="!shortcutConfig.enabled"
                 class="shortcutBtn"
                 @keydown.native.prevent="onKeyRecord($event, item.key)"
                 @blur="onBlurRecord(item.key)"
                 @click="startRecord(item.key)"
               >
-                {{ recordingKey === item.key ? (tempRecorded || '请按下按键...') : (reviewShortcuts[item.key] || '未设置') }}
+                {{ recordingKey === item.key ? (tempRecorded || '按下按键...') : (shortcutConfig.shortcuts[item.key] || '未设置') }}
+              </el-button>
+              <el-button
+                size="mini"
+                type="text"
+                class="singleResetBtn"
+                :disabled="!shortcutConfig.enabled || shortcutConfig.shortcuts[item.key] === item.defaultKey"
+                @click="onResetSingleShortcut(item.key)"
+                title="恢复该项默认键位"
+              >
+                默认
               </el-button>
             </div>
           </div>
@@ -67,10 +102,14 @@ import Sidebar from './Sidebar.vue'
 import { shortcutKeyList } from '@/config'
 import { mapState } from 'vuex'
 import {
-  getReviewShortcuts,
-  saveReviewShortcuts,
+  REVIEW_ACTION_DEFS,
+  getReviewShortcutConfig,
+  saveReviewShortcutConfig,
   resetReviewShortcuts,
-  formatKeyEventToShortcut
+  setReviewShortcutsEnabled,
+  formatKeyEventToShortcut,
+  checkShortcutConflict,
+  reviewShortcutDispatcher
 } from '@/review/reviewShortcuts'
 
 // 快捷键
@@ -80,47 +119,10 @@ export default {
   },
   data() {
     return {
-      reviewShortcuts: getReviewShortcuts(),
+      shortcutConfig: getReviewShortcutConfig(),
+      actionDefs: REVIEW_ACTION_DEFS,
       recordingKey: null,
-      tempRecorded: '',
-      reviewShortcutDefList: [
-        {
-          key: 'toggleReview',
-          name: '加入 / 移出复习',
-          desc: '选中节点后加入或移出复习计划',
-          icon: '🔄'
-        },
-        {
-          key: 'openReviewDialog',
-          name: '打开复习详情',
-          desc: '打开当前选中节点的复习管理弹窗',
-          icon: '📖'
-        },
-        {
-          key: 'toggleFocus',
-          name: '标记 / 取消重点',
-          desc: '切换当前选中节点的星标重点复习状态',
-          icon: '⭐️'
-        },
-        {
-          key: 'quickRemember',
-          name: '快捷评价：记得',
-          desc: '直接完成一次复习并推进复习周期',
-          icon: '✅'
-        },
-        {
-          key: 'quickFuzzy',
-          name: '快捷评价：模糊',
-          desc: '直接完成一次复习并缩短间隔',
-          icon: '🤔'
-        },
-        {
-          key: 'quickForgot',
-          name: '快捷评价：忘了',
-          desc: '直接完成一次复习并重置周期',
-          icon: '😰'
-        }
-      ]
+      tempRecorded: ''
     }
   },
   computed: {
@@ -136,24 +138,32 @@ export default {
   watch: {
     activeSidebar(val) {
       if (val === 'shortcutKey') {
-        this.reviewShortcuts = getReviewShortcuts()
+        this.shortcutConfig = getReviewShortcutConfig()
         this.$refs.sidebar.show = true
       } else {
         this.$refs.sidebar.show = false
         this.recordingKey = null
         this.tempRecorded = ''
+        reviewShortcutDispatcher.setRecording(false)
       }
     }
   },
   methods: {
+    onToggleEnabled(val) {
+      this.shortcutConfig = setReviewShortcutsEnabled(val)
+      this.$bus.$emit('review_shortcuts_changed', this.shortcutConfig.shortcuts)
+      this.$message.success(val ? '复习快捷键已开启' : '复习快捷键已全局关闭')
+    },
     startRecord(key) {
       this.recordingKey = key
       this.tempRecorded = ''
+      reviewShortcutDispatcher.setRecording(true)
     },
     onBlurRecord(key) {
       if (this.recordingKey === key) {
         this.recordingKey = null
         this.tempRecorded = ''
+        reviewShortcutDispatcher.setRecording(false)
       }
     },
     onKeyRecord(e, key) {
@@ -161,6 +171,7 @@ export default {
       if (e.keyCode === 27) {
         this.recordingKey = null
         this.tempRecorded = ''
+        reviewShortcutDispatcher.setRecording(false)
         return
       }
       const formatted = formatKeyEventToShortcut(e)
@@ -169,22 +180,61 @@ export default {
       // 如果按下了实际按键（非单纯修饰键）
       if (![16, 17, 18, 91, 93, 224].includes(e.keyCode)) {
         if (formatted) {
-          const next = {
-            ...this.reviewShortcuts,
+          // 冲突检测
+          const conflict = checkShortcutConflict(key, formatted, this.shortcutConfig.shortcuts)
+          if (conflict.hasConflict) {
+            if (conflict.type === 'browser') {
+              this.$message.warning(conflict.message)
+            } else {
+              this.$message.error(conflict.message)
+              this.recordingKey = null
+              this.tempRecorded = ''
+              reviewShortcutDispatcher.setRecording(false)
+              return
+            }
+          }
+
+          const nextShortcuts = {
+            ...this.shortcutConfig.shortcuts,
             [key]: formatted
           }
-          this.reviewShortcuts = saveReviewShortcuts(next)
-          this.$bus.$emit('review_shortcuts_changed', this.reviewShortcuts)
+          this.shortcutConfig = saveReviewShortcutConfig({
+            enabled: this.shortcutConfig.enabled,
+            shortcuts: nextShortcuts
+          })
+          this.$bus.$emit('review_shortcuts_changed', this.shortcutConfig.shortcuts)
           this.$message.success(`已保存快捷键：${formatted}`)
         }
         this.recordingKey = null
         this.tempRecorded = ''
+        reviewShortcutDispatcher.setRecording(false)
       }
     },
-    onResetReviewShortcuts() {
-      this.reviewShortcuts = resetReviewShortcuts()
-      this.$bus.$emit('review_shortcuts_changed', this.reviewShortcuts)
-      this.$message.success('已恢复复习快捷键默认设置')
+    onResetAllReviewShortcuts() {
+      this.$confirm('确定将所有复习快捷键恢复为默认值吗？', '恢复默认', {
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }).then(() => {
+        const defaults = resetReviewShortcuts()
+        this.shortcutConfig = getReviewShortcutConfig()
+        this.$bus.$emit('review_shortcuts_changed', defaults)
+        this.$message.success('已恢复全部默认复习快捷键')
+      }).catch(() => {})
+    },
+    onResetSingleShortcut(key) {
+      const def = this.actionDefs.find(d => d.key === key)
+      if (!def) return
+      const nextShortcuts = {
+        ...this.shortcutConfig.shortcuts,
+        [key]: def.defaultKey
+      }
+      this.shortcutConfig = saveReviewShortcutConfig({
+        enabled: this.shortcutConfig.enabled,
+        shortcuts: nextShortcuts
+      })
+      this.$bus.$emit('review_shortcuts_changed', this.shortcutConfig.shortcuts)
+      this.$message.success(`「${def.name}」已恢复为默认：${def.defaultKey}`)
     }
   }
 }
@@ -209,32 +259,86 @@ export default {
       }
     }
 
+    .globalToggleRow {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 10px;
+      font-size: 13px;
+      font-weight: 500;
+
+      .toggleStatus {
+        font-size: 12px;
+        color: #909399;
+      }
+    }
+
     .tipText {
       font-size: 12px;
       color: #909399;
       line-height: 1.5;
       margin-bottom: 12px;
+
+      &.disabledTip {
+        color: #e6a23c;
+      }
+    }
+
+    .disabledList {
+      opacity: 0.6;
     }
 
     .customItem {
       display: flex;
-      align-items: center;
+      align-items: flex-start;
       justify-content: space-between;
-      margin-bottom: 10px;
+      margin-bottom: 12px;
 
-      .name {
+      .icon {
+        margin-right: 8px;
+        font-size: 16px;
+        margin-top: 2px;
+      }
+
+      .itemInfo {
         flex: 1;
         margin-right: 8px;
-        font-size: 13px;
+
+        .nameRow {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+
+          .name {
+            font-size: 13px;
+            font-weight: 500;
+          }
+        }
+
+        .desc {
+          font-size: 11px;
+          color: #909399;
+          margin-top: 2px;
+          line-height: 1.3;
+        }
       }
 
       .actionBox {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+
         .shortcutBtn {
-          min-width: 90px;
+          min-width: 84px;
           font-family: monospace;
           font-weight: 500;
           font-size: 12px;
-          padding: 5px 8px;
+          padding: 4px 6px;
+        }
+
+        .singleResetBtn {
+          padding: 2px 4px;
+          font-size: 11px;
         }
       }
     }

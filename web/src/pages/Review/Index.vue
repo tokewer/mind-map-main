@@ -2,7 +2,10 @@
   <div class="reviewPage" :class="{ dark: isDark }">
     <header class="pageHeader">
       <div class="left">
-        <h2>复习中心</h2>
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <h2>复习中心</h2>
+          <el-tag size="mini" type="info">v1.1.0</el-tag>
+        </div>
         <span class="date">{{ today }}</span>
       </div>
       <div class="right">

@@ -34,6 +34,7 @@ def _resolve_port(default=8080):
     return default
 
 
+VERSION = '1.1.0'
 PORT = _resolve_port()
 ROOT = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(ROOT, 'data')
@@ -435,7 +436,7 @@ class ThreadingHTTPServer(socketserver.ThreadingTCPServer):
 
 if __name__ == '__main__':
     ensure_dirs()
-    print('复习思维导图已启动: http://127.0.0.1:{}'.format(PORT))
+    print('复习思维导图已启动 [v{}]: http://127.0.0.1:{}'.format(VERSION, PORT))
     print('数据存储目录: {}'.format(DATA_DIR))
     threading.Thread(target=_idle_maintenance_loop, daemon=True).start()
     _trim_memory()

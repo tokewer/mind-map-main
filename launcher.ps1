@@ -1,32 +1,58 @@
-# 复习思维导图 - 一键启动器
-#
-# 行为：
-#   1. 如果「学习工具中心」管理器正在运行 —— 交给它启动并打开，
-#      这样导图会和其它工具共用统一入口、支持挂起/恢复。
-#   2. 否则按老办法，自己用 8080 端口启动（原来的用法完全不变）。
-#
-# 两种情况都会在浏览器里打开页面，用户不需要关心区别。
-
-$ErrorActionPreference = "Stop"
+﻿# 复习思维导图 - 一键启动器 (增强自愈与多模式自适应版)
+$ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Definition
-$PORT = 8080
+$DEFAULT_PORT = 8080
+$PORT = $DEFAULT_PORT
 $URL = "http://127.0.0.1:$PORT"
-
-# 管理器的位置（相对本目录：..\..\程序管理）
-$centerRoot = Join-Path (Split-Path -Parent (Split-Path -Parent $root)) '程序管理'
-$centerExe = Join-Path $centerRoot '学习工具中心.exe'
 
 function Test-Port($port) {
     $c = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
     return ($null -ne $c)
 }
 
+function Find-FreePort($startPort) {
+    for ($p = $startPort; $p -le ($startPort + 50); $p++) {
+        if (-not (Test-Port $p)) {
+            return $p
+        }
+    }
+    return $startPort
+}
+
 function Test-ManagerRunning {
-    # 管理器的身份接口：只有它会返回 StudyToolCenter
     try {
-        $resp = Invoke-WebRequest -Uri "http://127.0.0.1:$PORT/api/manager-ping" `
-            -UseBasicParsing -TimeoutSec 2 -Proxy $null
+        $resp = Invoke-WebRequest -Uri "http://127.0.0.1:$DEFAULT_PORT/api/manager-ping" -UseBasicParsing -TimeoutSec 2 -Proxy $null
         return ($resp.StatusCode -eq 200 -and $resp.Content -match 'StudyToolCenter')
+    } catch {
+        return $false
+    }
+}
+
+function Register-MindMapToManager {
+    try {
+        $regBody = @{
+            id = 'mindmap'
+            name = '思绪思维导图'
+            emoji = '📚'
+            description = '复习用思维导图，支持细粒度复习与历史版本'
+            command = 'python'
+            args = @('server.py', '8081')
+            workingDirectory = $root
+            port = 8081
+            aliasIndex = 2
+            healthUrl = '/'
+            startTimeout = 45
+            stopTimeout = 8
+            url = ''
+            mode = 'proxy'
+            enabled = $true
+            allowSuspend = $true
+            openBrowser = $true
+            shortcut = 'Ctrl+1'
+        }
+        $jsonStr = $regBody | ConvertTo-Json -Depth 5
+        Invoke-RestMethod -Uri "http://127.0.0.1:$DEFAULT_PORT/api/apps" -Method Post -Body $jsonStr -ContentType 'application/json; charset=utf-8' -TimeoutSec 10 -Proxy $null | Out-Null
+        return $true
     } catch {
         return $false
     }
@@ -38,25 +64,34 @@ Write-Host "       复习思维导图 - 启动中" -ForegroundColor Cyan
 Write-Host "======================================" -ForegroundColor Cyan
 
 # ---------- 首选：交给「学习工具中心」 ----------
-if ((Test-ManagerRunning) -and (Test-Path $centerExe)) {
-    Write-Host "检测到「学习工具中心」正在运行，交给它启动…" -ForegroundColor Green
+if (Test-ManagerRunning) {
+    Write-Host "检测到「学习工具中心」正在运行，正在激活..." -ForegroundColor Green
+    $activateSuccess = $false
     try {
-        $body = @{}
-        Invoke-RestMethod -Uri "http://127.0.0.1:$PORT/api/apps/mindmap/activate" `
-            -Method Post -TimeoutSec 180 -Proxy $null | Out-Null
-        Write-Host "已就绪，正在打开浏览器…" -ForegroundColor Green
-        # 管理器会把它挂到统一入口（127.0.0.2:8080）；用别名地址打开，
-        # 这样和从管理器首页点进来是完全一样的地址。
-        Start-Process "http://127.0.0.2:$PORT"
+        Invoke-RestMethod -Uri "http://127.0.0.1:$DEFAULT_PORT/api/apps/mindmap/activate" -Method Post -TimeoutSec 180 -Proxy $null | Out-Null
+        $activateSuccess = $true
+    } catch {
+        Write-Host "正在自动同步思维导图配置至管理器..." -ForegroundColor Yellow
+        if (Register-MindMapToManager) {
+            try {
+                Invoke-RestMethod -Uri "http://127.0.0.1:$DEFAULT_PORT/api/apps/mindmap/activate" -Method Post -TimeoutSec 180 -Proxy $null | Out-Null
+                $activateSuccess = $true
+            } catch {}
+        }
+    }
+
+    if ($activateSuccess) {
+        Write-Host "已就绪，正在打开浏览器..." -ForegroundColor Green
+        Start-Process "http://127.0.0.2:$DEFAULT_PORT"
         Write-Host ""
         Write-Host "运行中。要停止或挂起，请到「学习工具中心」页面操作。"
         exit 0
-    } catch {
-        Write-Host "[提示] 通过管理器启动失败，改用独立方式启动…" -ForegroundColor Yellow
+    } else {
+        Write-Host "[提示] 通过管理器启动未就绪，改用独立方式启动..." -ForegroundColor Yellow
     }
 }
 
-# ---------- 兜底：原来的独立启动方式 ----------
+# ---------- 兜底：独立启动方式 ----------
 if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
     Write-Host "[错误] 未找到 Python，请先安装 Python 3.10 及以上版本。" -ForegroundColor Red
     Read-Host "按回车退出"
@@ -64,44 +99,39 @@ if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
 }
 
 if (Test-Port $PORT) {
-    $ownerPid = (Get-NetTCPConnection -LocalPort $PORT -State Listen -ErrorAction SilentlyContinue |
-        Select-Object -First 1).OwningProcess
+    $ownerPid = (Get-NetTCPConnection -LocalPort $PORT -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1).OwningProcess
     $ownerProc = Get-CimInstance Win32_Process -Filter "ProcessId = $ownerPid" -ErrorAction SilentlyContinue
-    $isPyServer = $null -ne $ownerProc -and $ownerProc.Name -match 'python' -and $ownerProc.CommandLine -match 'server\.py'
-    if (-not $isPyServer) {
-        Write-Host "[警告] 端口 $PORT 已被其他程序占用，无法启动本服务。" -ForegroundColor Red
-        if ($ownerProc) { Write-Host "占用进程：$($ownerProc.Name) (PID $ownerPid)" -ForegroundColor Red }
-        Write-Host ""
-        Write-Host "提示：如果占用者是「学习工具中心」，说明管理器正在运行，" -ForegroundColor Yellow
-        Write-Host "      它刚刚可能还没就绪。请稍等几秒再双击本启动器，" -ForegroundColor Yellow
-        Write-Host "      或者直接双击「学习工具中心.exe」统一启动。      " -ForegroundColor Yellow
-        Read-Host "按回车退出"
-        exit 1
-    }
-    # 占用者是本项目 server.py 的进程：
-    # - 命令行指向当前目录（本启动器新版本用完整路径启动）且 server.py 未更新 → 复用，直接打开
-    # - 否则（其他目录的旧进程 / 旧版相对路径启动 / 代码已更新未重启）→ 杀掉并重启当前目录最新版
-    $cmdline = [string]$ownerProc.CommandLine
-    $isCurrentRoot = $cmdline.ToLower().Contains($root.TrimEnd('\').ToLower())
-    $serverFileTime = (Get-Item "$root\server.py" -ErrorAction SilentlyContinue).LastWriteTime
-    $procStartTime = $ownerProc.CreationDate
-    $shouldRestart = -not $isCurrentRoot -or ($serverFileTime -gt $procStartTime)
-    if ($shouldRestart) {
-        Write-Host "检测到旧版/其他目录的服务进程 (PID $ownerPid)，正在重启以加载当前目录的最新版本..." -ForegroundColor Yellow
-        Stop-Process -Id $ownerPid -Force -ErrorAction SilentlyContinue
-        for ($i = 0; $i -lt 20; $i++) {
-            Start-Sleep -Milliseconds 500
-            if (-not (Test-Port $PORT)) { break }
+    $isPyServer = $null -ne $ownerProc -and $ownerProc.Name -match 'python' -and $ownerProc.CommandLine -match 'server.py'
+
+    if ($isPyServer) {
+        $cmdline = [string]$ownerProc.CommandLine
+        $isCurrentRoot = $cmdline.ToLower().Contains($root.TrimEnd('\').ToLower())
+        $serverFileTime = (Get-Item "$root\server.py" -ErrorAction SilentlyContinue).LastWriteTime
+        $procStartTime = $ownerProc.CreationDate
+        $shouldRestart = -not $isCurrentRoot -or ($serverFileTime -gt $procStartTime)
+
+        if ($shouldRestart) {
+            Write-Host "检测到旧版服务进程 (PID $ownerPid)，正在重启以加载最新版本..." -ForegroundColor Yellow
+            Stop-Process -Id $ownerPid -Force -ErrorAction SilentlyContinue
+            for ($i = 0; $i -lt 20; $i++) {
+                Start-Sleep -Milliseconds 500
+                if (-not (Test-Port $PORT)) { break }
+            }
+        } else {
+            Write-Host "服务已在运行，正在打开浏览器..." -ForegroundColor Green
+            Start-Process $URL
+            exit 0
         }
     } else {
-        Write-Host "服务已在运行，正在打开浏览器..." -ForegroundColor Green
-        Start-Process $URL
-        exit 0
+        $freePort = Find-FreePort 8081
+        Write-Host "端口 $PORT 已被其他服务占用，自动切换到独立可用端口 $freePort..." -ForegroundColor Yellow
+        $PORT = $freePort
+        $URL = "http://127.0.0.1:$PORT"
     }
 }
 
-Write-Host "正在启动服务，请稍候..."
-Start-Process python -ArgumentList "$root\server.py" -WorkingDirectory $root -WindowStyle Minimized
+Write-Host "正在启动服务 (端口 $PORT)，请稍候..."
+Start-Process python -ArgumentList "$root\server.py --port=$PORT" -WorkingDirectory $root -WindowStyle Minimized
 
 $ready = $false
 for ($i = 0; $i -lt 30; $i++) {

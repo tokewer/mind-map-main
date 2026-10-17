@@ -56,6 +56,7 @@
     <ReviewGlowSync></ReviewGlowSync>
     <MasteryColorSettings></MasteryColorSettings>
     <ReviewDialog></ReviewDialog>
+    <ReviewQuizDialog></ReviewQuizDialog>
     <CardManagerDialog></CardManagerDialog>
     <TrashDialog></TrashDialog>
     <HistoryDialog></HistoryDialog>
@@ -169,6 +170,7 @@ import ReviewFloat from './ReviewFloat.vue'
 import ReviewGlowSync from './ReviewGlowSync.vue'
 import MasteryColorSettings from './MasteryColorSettings.vue'
 import ReviewDialog from './ReviewDialog.vue'
+import ReviewQuizDialog from './ReviewQuizDialog.vue'
 import CardManagerDialog from './CardManagerDialog.vue'
 import TrashDialog from './TrashDialog.vue'
 import HistoryDialog from './HistoryDialog.vue'
@@ -237,6 +239,7 @@ export default {
     ReviewGlowSync,
     MasteryColorSettings,
     ReviewDialog,
+    ReviewQuizDialog,
     CardManagerDialog,
     TrashDialog,
     HistoryDialog,
@@ -681,7 +684,15 @@ export default {
       // 8. 打开复习中心/拷问
       if (shortcuts.openQuiz) {
         const fn = () => {
-          this.$router.push('/review')
+          const node = this.getSelectedRegularNode()
+          if (node) {
+            const inReview = !!getNode(node.uid)
+            if (inReview) {
+              this.$bus.$emit('open_quiz_dialog', { uid: node.uid })
+              return
+            }
+          }
+          this.$bus.$emit('open_quiz_dialog', { type: 'due' })
         }
         this.mindMap.keyCommand.addShortcut(shortcuts.openQuiz, fn)
         this._registeredReviewShortcuts.push({ key: shortcuts.openQuiz, fn })

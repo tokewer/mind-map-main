@@ -127,6 +127,14 @@
         }}</span>
         <span class="desc">{{ inReview ? '√' : '' }}</span>
       </div>
+      <div
+        class="item"
+        v-if="inReview"
+        @click="openQuizReview"
+        :class="{ disabled: isGeneralization }"
+      >
+        <span class="name">🧠 拷问复习</span>
+      </div>
       <!-- 快捷复习：直接在当前节点完成/评价一次复习（复用复习系统） -->
       <div
         class="item"
@@ -638,6 +646,22 @@ export default {
         fileName: identity.fileName
       })
       this.hide()
+    },
+
+    // 针对当前节点启动独立拷问
+    openQuizReview() {
+      if (this.isGeneralization || !this.node) {
+        return
+      }
+      const node = this.node
+      const text = getTextFromHtml(node.getData('text'))
+      const rNode = getNode(node.uid)
+      this.hide()
+      if (rNode) {
+        this.$bus.$emit('open_quiz_dialog', { item: rNode })
+      } else {
+        this.$bus.$emit('open_quiz_dialog', { uid: node.uid, title: `单项拷问：${text}` })
+      }
     },
 
     // 标记重点

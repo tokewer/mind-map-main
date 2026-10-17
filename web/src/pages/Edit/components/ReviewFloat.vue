@@ -123,6 +123,17 @@
       <div class="panelBody">
         <!-- 今日视图 -->
         <template v-if="view === 'today'">
+          <div class="floatQuizBanner" v-if="dueList.length > 0">
+            <el-button
+              type="primary"
+              size="mini"
+              icon="el-icon-video-play"
+              style="width: 100%; font-weight: 600;"
+              @click="startTodayQuiz"
+            >
+              🧠 开始今日拷问 ({{ dueFiltered.length }} / {{ dueList.length }})
+            </el-button>
+          </div>
           <div v-if="dueList.length === 0" class="empty">今日没有待复习项</div>
           <div v-else-if="dueFiltered.length === 0" class="empty">
             无匹配项
@@ -143,6 +154,9 @@
                   </div>
                 </div>
                 <div class="itemOps">
+                  <el-button size="mini" type="text" @click.stop="startSingleQuiz(item)">
+                    🧠 拷问
+                  </el-button>
                   <el-button size="mini" type="text" @click.stop="locate(item)">
                     <i class="el-icon-location-outline"></i>
                   </el-button>
@@ -193,6 +207,9 @@
                   </div>
                 </div>
                 <div class="itemOps">
+                  <el-button size="mini" type="text" @click.stop="startSingleQuiz(item)">
+                    🧠 拷问
+                  </el-button>
                   <el-button size="mini" type="text" @click.stop="locate(item)">
                     <i class="el-icon-location-outline"></i>
                   </el-button>
@@ -631,6 +648,23 @@ export default {
     },
     statusType(s) {
       return STATUS_TYPE[s] || 'info'
+    },
+    // 启动今日待复习拷问弹窗（主页面直接拷问）
+    startTodayQuiz() {
+      const queue = (this.dueFiltered && this.dueFiltered.length ? this.dueFiltered : this.dueList).slice()
+      if (!queue.length) {
+        this.$message.info('今日没有待复习项目')
+        return
+      }
+      this.$bus.$emit('open_quiz_dialog', {
+        queue,
+        title: `今日待复习拷问 (${queue.length} 项)`
+      })
+    },
+    // 针对单个节点直接启动拷问弹窗
+    startSingleQuiz(item) {
+      if (!item) return
+      this.$bus.$emit('open_quiz_dialog', { item })
     },
     complete(item) {
       completeReview(item.uid)
@@ -1183,6 +1217,13 @@ export default {
       cursor: w-resize;
       border-radius: 2px;
     }
+  }
+
+  .floatQuizBanner {
+    padding: 8px 10px;
+    background: #f0f7ff;
+    border-radius: 6px;
+    margin-bottom: 10px;
   }
 
   // 鼠标悬停时显示调整把手

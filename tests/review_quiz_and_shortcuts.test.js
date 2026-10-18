@@ -43,7 +43,10 @@ import {
   RATING,
   addReview,
   rateReview,
+  removeReview,
   getNode,
+  getArchivedNode,
+  transferReviewProgress,
   importReviewData
 } from '../web/src/review/index.js'
 
@@ -301,3 +304,129 @@ describe('复习卡片与四级评价流程测试 (rateReview)', () => {
     expect(afterMaster.ratingHistory[0].rating).toBe(RATING.MASTERED)
   })
 })
+
+describe('恢复复习节点历史进度保留测试 (restoreReviewProgress)', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    importReviewData('{"version":6,"nodes":{},"archivedNodes":{}}')
+  })
+
+  test('移出复习后节点进入归档，不丢失进度与卡片', () => {
+    const node = addReview({
+      uid: 'node_prog_1',
+      name: 'HTTP 缓存机制',
+      cycles: [1, 2, 5],
+      cards: [
+        { id: 'c1', type: 'qa', front: '强缓存有哪些响应头？', back: 'Expires 与 Cache-Control' }
+      ]
+    })
+    expect(node.uid).toBe('node_prog_1')
+
+    // 完成两次复习并产生一次遗忘
+    rateReview('node_prog_1', RATING.REMEMBER)
+    rateReview('node_prog_1', RATING.FORGOT)
+
+    const beforeRemove = getNode('node_prog_1')
+    expect(beforeRemove.times).toBe(2)
+    expect(beforeRemove.errorCount).toBe(1)
+    expect(beforeRemove.cards.length).toBe(1)
+
+    // 移出复习
+    const removed = removeReview('node_prog_1')
+    expect(removed).not.toBeNull()
+    expect(removed.uid).toBe('node_prog_1')
+
+    // 验证活动节点中已不存在，但在归档中完好保留
+    expect(getNode('node_prog_1')).toBeNull()
+    const archived = getArchivedNode('node_prog_1')
+    expect(archived).not.toBeNull()
+    expect(archived.times).toBe(2)
+    expect(archived.errorCount).toBe(1)
+    expect(archived.cards.length).toBe(1)
+    expect(archived.cards[0].front).toBe('强缓存有哪些响应头？')
+  })
+
+  test('重新加入复习时自动保留并无缝恢复原进度', () => {
+    addReview({
+      uid: 'node_prog_2',
+      name: 'Vue 响应式原理',
+      cycles: [1, 3, 7],
+      cards: [{ id: 'c_vue', type: 'qa', front: 'Vue 2 与 Vue 3 核心区别', back: 'Object.defineProperty vs Proxy' }]
+    })
+    rateReview('node_prog_2', RATING.REMEMBER)
+    rateReview('node_prog_2', RATING.REMEMBER)
+
+    // 移出复习
+    removeReview('node_prog_2')
+    expect(getNode('node_prog_2')).toBeNull()
+
+    // 再次加入复习（未传 resetProgress 或传 false）
+    const restored = addReview({
+      uid: 'node_prog_2',
+      name: 'Vue 响应式原理 (更新)'
+    })
+
+    expect(restored).not.toBeNull()
+    expect(restored.restoredFromArchive).toBe(true)
+    expect(restored.times).toBe(2) // 进度无缝保留，不是重置为 0
+    expect(restored.cards.length).toBe(1) // 卡片未丢失
+    expect(restored.cards[0].front).toBe('Vue 2 与 Vue 3 核心区别')
+    expect(restored.name).toBe('Vue 响应式原理 (更新)')
+
+    // 验证归档池中该项已清理
+    expect(getArchivedNode('node_prog_2')).toBeNull()
+  })
+
+  test('显式指定 resetProgress=true 时，清除历史并从第 1 次全新开始', () => {
+    addReview({
+      uid: 'node_prog_3',
+      name: 'Git Rebase 流程',
+      cycles: [1, 2, 4]
+    })
+    rateReview('node_prog_3', RATING.REMEMBER)
+    rateReview('node_prog_3', RATING.REMEMBER)
+
+    removeReview('node_prog_3')
+
+    // 重新加入但指定 resetProgress: true
+    const fresh = addReview({
+      uid: 'node_prog_3',
+      name: 'Git Rebase 流程',
+      resetProgress: true
+    })
+
+    expect(fresh.times).toBe(0)
+    expect(fresh.restoredFromArchive).toBeUndefined()
+    expect(getArchivedNode('node_prog_3')).toBeNull()
+  })
+
+  test('transferReviewProgress 支持回收站恢复节点进度平移', () => {
+    addReview({
+      uid: 'old_uid_123',
+      name: '浏览器事件循环',
+      cycles: [1, 3, 5],
+      cards: [{ id: 'c_event', front: '宏任务与微任务顺序', back: '微任务优先于下一次宏任务' }]
+    })
+    rateReview('old_uid_123', RATING.REMEMBER)
+
+    // 模拟思维导图节点删除并进入回收站，随后恢复生成新 uid
+    removeReview('old_uid_123')
+    const newUid = 'restored_uid_456'
+
+    const success = transferReviewProgress('old_uid_123', newUid)
+    expect(success).toBe(true)
+
+    // 旧 uid 的归档不存在，新 uid 的归档已继承
+    expect(getArchivedNode('old_uid_123')).toBeNull()
+    const inheritedArchived = getArchivedNode('newUid' in {} ? '' : newUid)
+    expect(inheritedArchived).not.toBeNull()
+    expect(inheritedArchived.times).toBe(1)
+    expect(inheritedArchived.cards[0].front).toBe('宏任务与微任务顺序')
+
+    // 新 uid 重新加入复习
+    const restoredNode = addReview({ uid: newUid, name: '浏览器事件循环' })
+    expect(restoredNode.times).toBe(1)
+    expect(restoredNode.cards.length).toBe(1)
+  })
+})
+

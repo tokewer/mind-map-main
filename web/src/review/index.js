@@ -11,7 +11,7 @@ import { notifyWorkspaceChanged } from '@/api/workspaceEvents'
 const REVIEW_KEY = 'MIND_MAP_REVIEW_DATA'
 const FILE_LIST_KEY = 'SIMPLE_MIND_MAP_FILE_LIST'
 const DEFAULT_CYCLES = [1, 3, 4]
-const DATA_VERSION = 5
+const DATA_VERSION = 6
 
 // 内置周期预设种子：首次运行时写入 presets，用户可增删改
 const DEFAULT_PRESETS = [
@@ -111,36 +111,45 @@ const normalizePresets = data => {
   return data
 }
 
+// 规范化单条复习节点数据
+const migrateNode = (n, uid) => {
+  if (!n || typeof n !== 'object') return null
+  n.uid = n.uid || uid
+  n.name = n.name || '未命名'
+  n.path = typeof n.path === 'string' ? n.path : ''
+  n.fileId = n.fileId || ''
+  n.fileName = n.fileName || ''
+  n.cycles = parseCycles(n.cycles).length ? parseCycles(n.cycles) : [...DEFAULT_CYCLES]
+  n.times = Number.isFinite(Number(n.times)) ? Number(n.times) : 0
+  n.nextCycleIndex = Number.isFinite(Number(n.nextCycleIndex)) ? Number(n.nextCycleIndex) : 0
+  n.lastReview = n.lastReview || null
+  n.nextReview = n.nextReview || null
+  n.status = n.status || 'new'
+  n.errorCount = Number(n.errorCount) || 0 // 累计错误次数
+  n.consecutiveSuccess = Number(n.consecutiveSuccess) || 0 // 连续成功次数
+  n.mastery = n.mastery || deriveMastery(n) // 掌握度等级
+  n.cards = Array.isArray(n.cards) ? n.cards : [] // 复习卡片列表
+  n.tags = Array.isArray(n.tags) ? n.tags : [] // 标签
+  n.lastRating = n.lastRating || null // 上次评价
+  n.ratingHistory = Array.isArray(n.ratingHistory) ? n.ratingHistory : [] // 评价历史
+  n.history = Array.isArray(n.history) ? n.history : []
+  n.parentUid = n.parentUid || ''
+  n.frequency = n.frequency || 'normal' // 复习频率（低/正常/高）
+  n.isFocus = n.isFocus === true // 重点标记
+  n.stage = getReviewStage(n)
+  n.version = DATA_VERSION
+  return n
+}
+
 // ---------- 数据迁移 ----------
 const migrate = data => {
   const nodes = data.nodes || {}
   Object.keys(nodes).forEach(uid => {
-    const n = nodes[uid]
-    if (!n || typeof n !== 'object') return
-    n.uid = n.uid || uid
-    n.name = n.name || '未命名'
-    n.path = typeof n.path === 'string' ? n.path : ''
-    n.fileId = n.fileId || ''
-    n.fileName = n.fileName || ''
-    n.cycles = parseCycles(n.cycles).length ? parseCycles(n.cycles) : [...DEFAULT_CYCLES]
-    n.times = Number.isFinite(Number(n.times)) ? Number(n.times) : 0
-    n.nextCycleIndex = Number.isFinite(Number(n.nextCycleIndex)) ? Number(n.nextCycleIndex) : 0
-    n.lastReview = n.lastReview || null
-    n.nextReview = n.nextReview || null
-    n.status = n.status || 'new'
-    n.errorCount = Number(n.errorCount) || 0 // 累计错误次数
-    n.consecutiveSuccess = Number(n.consecutiveSuccess) || 0 // 连续成功次数
-    n.mastery = n.mastery || deriveMastery(n) // 掌握度等级
-    n.cards = Array.isArray(n.cards) ? n.cards : [] // 复习卡片列表
-    n.tags = Array.isArray(n.tags) ? n.tags : [] // 标签
-    n.lastRating = n.lastRating || null // 上次评价
-    n.ratingHistory = Array.isArray(n.ratingHistory) ? n.ratingHistory : [] // 评价历史
-    n.history = Array.isArray(n.history) ? n.history : []
-    n.parentUid = n.parentUid || ''
-    n.frequency = n.frequency || 'normal' // 复习频率（低/正常/高）
-    n.isFocus = n.isFocus === true // 重点标记
-    n.stage = getReviewStage(n)
-    n.version = DATA_VERSION
+    migrateNode(nodes[uid], uid)
+  })
+  data.archivedNodes = data.archivedNodes || {}
+  Object.keys(data.archivedNodes).forEach(uid => {
+    migrateNode(data.archivedNodes[uid], uid)
   })
   data.version = DATA_VERSION
   return normalizePresets(data)
@@ -205,7 +214,8 @@ const createFreshData = () =>
     version: DATA_VERSION,
     defaultCycles: [...DEFAULT_CYCLES],
     activePresetId: null,
-    nodes: {}
+    nodes: {},
+    archivedNodes: {}
   })
 
 // 判断当前是否处于本地工作目录模式且句柄有效
@@ -284,6 +294,7 @@ const loadFromLocalStorage = () => {
       defaultCycles: [...DEFAULT_CYCLES],
       activePresetId: null,
       nodes: {},
+      archivedNodes: {},
       ...data
     }
     // 保留旧版本号，不能在迁移前直接覆盖为当前版本。
@@ -332,14 +343,17 @@ const resolveNodeMapKey = (node, idToNameMap = null) => {
   return ''
 }
 
-// 将复习总数据拆分为：根目录全局配置（含未归属节点）+ 各导图文件夹的 nodes 字典
+// 将复习总数据拆分为：根目录全局配置（含未归属节点与归档）+ 各导图文件夹的 nodes 与 archivedNodes 字典
 const partitionReviewData = (data, idToNameMap = null) => {
   const mapBuckets = {}
   knownMapKeys.forEach(k => {
-    if (k) mapBuckets[k] = {}
+    if (k) mapBuckets[k] = { nodes: {}, archivedNodes: {} }
   })
   const unassignedNodes = {}
+  const unassignedArchived = {}
   const nodes = (data && data.nodes) || {}
+  const archived = (data && data.archivedNodes) || {}
+
   Object.keys(nodes).forEach(uid => {
     const n = nodes[uid]
     if (!n || typeof n !== 'object') return
@@ -348,12 +362,28 @@ const partitionReviewData = (data, idToNameMap = null) => {
       knownMapKeys.add(key)
       n.fileId = directoryStorage.ensureSmmExt(key)
       n.fileName = key
-      if (!mapBuckets[key]) mapBuckets[key] = {}
-      mapBuckets[key][uid] = n
+      if (!mapBuckets[key]) mapBuckets[key] = { nodes: {}, archivedNodes: {} }
+      mapBuckets[key].nodes[uid] = n
     } else {
       unassignedNodes[uid] = n
     }
   })
+
+  Object.keys(archived).forEach(uid => {
+    const n = archived[uid]
+    if (!n || typeof n !== 'object') return
+    const key = resolveNodeMapKey(n, idToNameMap)
+    if (key) {
+      knownMapKeys.add(key)
+      n.fileId = directoryStorage.ensureSmmExt(key)
+      n.fileName = key
+      if (!mapBuckets[key]) mapBuckets[key] = { nodes: {}, archivedNodes: {} }
+      mapBuckets[key].archivedNodes[uid] = n
+    } else {
+      unassignedArchived[uid] = n
+    }
+  })
+
   const rootPayload = {
     version: DATA_VERSION,
     defaultCycles: Array.isArray(data.defaultCycles) && data.defaultCycles.length
@@ -362,7 +392,8 @@ const partitionReviewData = (data, idToNameMap = null) => {
     activePresetId: data.activePresetId || null,
     presets: Array.isArray(data.presets) ? data.presets : [],
     migratedFromLocalStorage: true,
-    nodes: unassignedNodes
+    nodes: unassignedNodes,
+    archivedNodes: unassignedArchived
   }
   return { rootPayload, mapBuckets }
 }
@@ -378,12 +409,12 @@ const persistDirectoryReviewData = (data, options = {}) => {
     directoryStorage.saveRootReviewFile(rootPayload)
   }
   Object.keys(mapBuckets).forEach(key => {
-    const mapNodes = mapBuckets[key] || {}
-    const mapSig = JSON.stringify(mapNodes)
+    const mapBucket = mapBuckets[key] || { nodes: {}, archivedNodes: {} }
+    const mapSig = JSON.stringify(mapBucket)
     const sigKey = 'map:' + key
     if (options.forceMaps || lastSavedSignatures.get(sigKey) !== mapSig) {
       lastSavedSignatures.set(sigKey, mapSig)
-      directoryStorage.saveMapReviewFile(key, mapNodes)
+      directoryStorage.saveMapReviewFile(key, mapBucket)
     }
   })
 }
@@ -406,8 +437,9 @@ export const syncReviewFromDirectory = async () => {
 
   const rootData = loaded.rootData && typeof loaded.rootData === 'object' ? loaded.rootData : null
   const mergedNodes = {}
+  const mergedArchivedNodes = {}
 
-  // 1. 先加载根目录未绑定导图的复习节点
+  // 1. 先加载根目录未绑定导图的复习节点与已归档节点
   if (rootData && rootData.nodes && typeof rootData.nodes === 'object') {
     Object.keys(rootData.nodes).forEach(uid => {
       const n = rootData.nodes[uid]
@@ -416,17 +448,39 @@ export const syncReviewFromDirectory = async () => {
       }
     })
   }
+  if (rootData && rootData.archivedNodes && typeof rootData.archivedNodes === 'object') {
+    Object.keys(rootData.archivedNodes).forEach(uid => {
+      const n = rootData.archivedNodes[uid]
+      if (n && typeof n === 'object') {
+        mergedArchivedNodes[uid] = { ...n, uid: n.uid || uid }
+      }
+    })
+  }
 
-  // 2. 加载各导图文件夹 maps/<导图名>/review.json 中的节点（以文件夹名为权威来源）
+  // 2. 加载各导图文件夹 maps/<导图名>/review.json 中的节点与归档节点（以文件夹名为权威来源）
   (loaded.mapKeys || []).forEach(key => {
     const entry = loaded.mapReviews && loaded.mapReviews[key]
     const rawNodes = entry && entry.data && entry.data.nodes
+    const rawArchived = entry && entry.data && entry.data.archivedNodes
+    const canonicalId = directoryStorage.ensureSmmExt(key)
     if (rawNodes && typeof rawNodes === 'object') {
-      const canonicalId = directoryStorage.ensureSmmExt(key)
       Object.keys(rawNodes).forEach(uid => {
         const n = rawNodes[uid]
         if (n && typeof n === 'object') {
           mergedNodes[uid] = {
+            ...n,
+            uid: n.uid || uid,
+            fileId: canonicalId,
+            fileName: key
+          }
+        }
+      })
+    }
+    if (rawArchived && typeof rawArchived === 'object') {
+      Object.keys(rawArchived).forEach(uid => {
+        const n = rawArchived[uid]
+        if (n && typeof n === 'object') {
+          mergedArchivedNodes[uid] = {
             ...n,
             uid: n.uid || uid,
             fileId: canonicalId,
@@ -473,6 +527,18 @@ export const syncReviewFromDirectory = async () => {
         }
         mergedNodes[uid] = copy
       })
+      const lsArchived = lsData.archivedNodes || {}
+      Object.keys(lsArchived).forEach(uid => {
+        const n = lsArchived[uid]
+        if (!n || typeof n !== 'object') return
+        const copy = { ...n, uid: n.uid || uid }
+        const matchedKey = resolveNodeMapKey(copy, idToNameMap)
+        if (matchedKey) {
+          copy.fileId = directoryStorage.ensureSmmExt(matchedKey)
+          copy.fileName = matchedKey
+        }
+        mergedArchivedNodes[uid] = copy
+      })
       migratedFromLs = true
     }
   }
@@ -482,7 +548,8 @@ export const syncReviewFromDirectory = async () => {
     defaultCycles,
     activePresetId,
     presets,
-    nodes: mergedNodes
+    nodes: mergedNodes,
+    archivedNodes: mergedArchivedNodes
   })
   directoryReviewCache = combined
 
@@ -494,12 +561,13 @@ export const syncReviewFromDirectory = async () => {
     directoryStorage.saveRootReviewFile(rootPayload)
   }
   Object.keys(mapBuckets).forEach(key => {
-    const mapNodes = mapBuckets[key] || {}
-    const mapSig = JSON.stringify(mapNodes)
+    const mapBucket = mapBuckets[key] || { nodes: {}, archivedNodes: {} }
+    const mapSig = JSON.stringify(mapBucket)
     lastSavedSignatures.set('map:' + key, mapSig)
     const entry = loaded.mapReviews && loaded.mapReviews[key]
-    if (!entry || !entry.exists || (migratedFromLs && Object.keys(mapNodes).length > 0)) {
-      directoryStorage.saveMapReviewFile(key, mapNodes)
+    const hasAny = Object.keys(mapBucket.nodes).length > 0 || Object.keys(mapBucket.archivedNodes).length > 0
+    if (!entry || !entry.exists || (migratedFromLs && hasAny)) {
+      directoryStorage.saveMapReviewFile(key, mapBucket)
     }
   })
 
@@ -675,8 +743,72 @@ export const getNode = uid => {
   return load().nodes[uid] || null
 }
 
+// 获取已移出复习的归档节点历史进度
+export const getArchivedNode = uid => {
+  if (!uid) return null
+  const data = load()
+  return (data.archivedNodes && data.archivedNodes[uid]) || null
+}
+
+// 根据节点信息查找匹配的历史归档记录（支持 uid 匹配及名称+导图文件容错匹配）
+export const findArchivedNode = ({ uid = '', name = '', fileId = '', fileName = '' } = {}) => {
+  const data = load()
+  const archived = data.archivedNodes || {}
+  if (uid && archived[uid]) {
+    return archived[uid]
+  }
+  if (!name) return null
+  const targetMapKey = directoryStorage.toMapKey(fileId || fileName)
+  const keys = Object.keys(archived)
+  for (let i = 0; i < keys.length; i++) {
+    const item = archived[keys[i]]
+    if (item && item.name === name) {
+      if (!targetMapKey) return item
+      const itemKey = directoryStorage.toMapKey(item.fileId || item.fileName)
+      if (itemKey === targetMapKey) return item
+    }
+  }
+  return null
+}
+
+// 迁移或继承节点复习进度（适用于回收站恢复节点、uid 重建等场景）
+export const transferReviewProgress = (oldUid, newUid) => {
+  if (!oldUid || !newUid || oldUid === newUid) return false
+  const data = load()
+  let changed = false
+  if (data.nodes && data.nodes[oldUid]) {
+    const node = data.nodes[oldUid]
+    node.uid = newUid
+    data.nodes[newUid] = node
+    delete data.nodes[oldUid]
+    changed = true
+  }
+  if (data.archivedNodes && data.archivedNodes[oldUid]) {
+    const node = data.archivedNodes[oldUid]
+    node.uid = newUid
+    data.archivedNodes[newUid] = node
+    delete data.archivedNodes[oldUid]
+    changed = true
+  }
+  if (changed) {
+    save(data)
+  }
+  return changed
+}
+
 // 加入复习。cycles 可为数组或字符串；缺省用全局默认周期
-export const addReview = ({ uid, name, path = '', fileId = '', fileName = '', parentUid = '', cycles = null, cards = [] }) => {
+// 若检测到历史归档且未指定 resetProgress=true，将自动恢复原进度
+export const addReview = ({
+  uid,
+  name,
+  path = '',
+  fileId = '',
+  fileName = '',
+  parentUid = '',
+  cycles = null,
+  cards = [],
+  resetProgress = false
+}) => {
   const data = load()
   const today = todayStr()
   let resolvedFileId = fileId
@@ -702,8 +834,76 @@ export const addReview = ({ uid, name, path = '', fileId = '', fileName = '', pa
       }
     }
   }
+
+  const effectiveUid = uid || 'manual_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6)
+
+  // 1. 检查是否存在该节点的历史复习存档
+  data.archivedNodes = data.archivedNodes || {}
+  const archived =
+    data.archivedNodes[effectiveUid] ||
+    (uid ? findArchivedNode({ uid, name, fileId: resolvedFileId, fileName: resolvedFileName }) : null)
+
+  if (archived && !resetProgress) {
+    // 恢复历史复习进度
+    const archivedUid = archived.uid || effectiveUid
+    delete data.archivedNodes[archivedUid]
+
+    const parsedCycles = parseCycles(cycles)
+    const effectiveCycles = parsedCycles.length
+      ? parsedCycles
+      : (archived.cycles && archived.cycles.length ? archived.cycles : parseCycles(data.defaultCycles))
+
+    // 下次复习安排：如果已掌握保持已掌握；若原下次复习日期落后于今天或为空，安排在今天以便立即接续复习
+    let nextReviewDate = archived.nextReview
+    if (!nextReviewDate || nextReviewDate < today) {
+      nextReviewDate = today
+    }
+
+    const mergedCards = Array.isArray(cards) && cards.length
+      ? cards.slice()
+      : (Array.isArray(archived.cards) ? archived.cards.slice() : [])
+
+    const restoredNode = {
+      ...archived,
+      uid: effectiveUid,
+      name: name || archived.name || '未命名',
+      path: path || archived.path || '',
+      fileId: resolvedFileId || archived.fileId || '',
+      fileName: resolvedFileName || archived.fileName || '',
+      parentUid: parentUid || archived.parentUid || '',
+      cycles: effectiveCycles,
+      times: Number.isFinite(Number(archived.times)) ? Number(archived.times) : 0,
+      nextCycleIndex: Math.min(Number(archived.nextCycleIndex) || 0, effectiveCycles.length - 1),
+      nextReview: nextReviewDate,
+      status: archived.status === 'mastered' ? 'mastered' : (Number(archived.times) > 0 ? 'reviewing' : 'new'),
+      mastery: archived.mastery || deriveMastery(archived),
+      errorCount: Number(archived.errorCount) || 0,
+      consecutiveSuccess: Number(archived.consecutiveSuccess) || 0,
+      lastRating: archived.lastRating || null,
+      ratingHistory: Array.isArray(archived.ratingHistory) ? archived.ratingHistory.slice() : [],
+      cards: mergedCards,
+      tags: Array.isArray(archived.tags) ? archived.tags.slice() : [],
+      frequency: archived.frequency || 'normal',
+      isFocus: archived.isFocus === true,
+      stage: getReviewStage({ times: archived.times }),
+      history: Array.isArray(archived.history) ? archived.history.slice() : [],
+      updatedAt: today,
+      restoredAt: today,
+      version: DATA_VERSION,
+      restoredFromArchive: true
+    }
+    data.nodes[effectiveUid] = restoredNode
+    save(data)
+    return restoredNode
+  }
+
+  // 若用户指定从头开始，清理旧归档
+  if (archived && resetProgress) {
+    delete data.archivedNodes[archived.uid || effectiveUid]
+  }
+
   const node = {
-    uid: uid || 'manual_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+    uid: effectiveUid,
     name: name || '未命名',
     path,
     fileId: resolvedFileId,
@@ -737,10 +937,16 @@ export const addReview = ({ uid, name, path = '', fileId = '', fileName = '', pa
 
 export const removeReview = uid => {
   const data = load()
-  if (data.nodes[uid]) {
+  if (data.nodes && data.nodes[uid]) {
+    const node = JSON.parse(JSON.stringify(data.nodes[uid]))
+    node.archivedAt = todayStr()
+    data.archivedNodes = data.archivedNodes || {}
+    data.archivedNodes[uid] = node
     delete data.nodes[uid]
     save(data)
+    return node
   }
+  return null
 }
 
 export const updateReviewName = (uid, name) => {
@@ -752,7 +958,7 @@ export const updateReviewName = (uid, name) => {
   save(data)
 }
 
-// 文件重命名后，同步更新所有属于该文件的复习记录文件名与文件标识
+// 文件重命名后，同步更新所有属于该文件的复习记录文件名与文件标识（含归档记录）
 export const renameFileForReviews = (fileId, newName, newFileId = '') => {
   if (!fileId) return
   const data = load()
@@ -766,8 +972,7 @@ export const renameFileForReviews = (fileId, newName, newFileId = '') => {
     knownMapKeys.add(newKey)
     lastSavedSignatures.delete('map:' + oldKey)
     lastSavedSignatures.delete('map:' + newKey)
-    Object.keys(data.nodes).forEach(uid => {
-      const n = data.nodes[uid]
+    const updateTargetNode = n => {
       if (!n) return
       if (
         n.fileId === fileId ||
@@ -778,15 +983,17 @@ export const renameFileForReviews = (fileId, newName, newFileId = '') => {
         n.fileName = newKey
         changed = true
       }
-    })
+    }
+    Object.keys(data.nodes || {}).forEach(uid => updateTargetNode(data.nodes[uid]))
+    Object.keys(data.archivedNodes || {}).forEach(uid => updateTargetNode(data.archivedNodes[uid]))
     // 即使没有关联节点，也把新文件夹下的 review.json 头信息刷新为新名称
     persistDirectoryReviewData(data, { forceMaps: true })
     notifyWorkspaceChanged()
     broadcastReviewUpdated()
     return
   }
-  Object.keys(data.nodes).forEach(uid => {
-    const n = data.nodes[uid]
+  const updateTargetNode = n => {
+    if (!n) return
     if (n.fileId === fileId) {
       if (n.fileName !== newName) {
         n.fileName = newName
@@ -797,11 +1004,13 @@ export const renameFileForReviews = (fileId, newName, newFileId = '') => {
         changed = true
       }
     }
-  })
+  }
+  Object.keys(data.nodes || {}).forEach(uid => updateTargetNode(data.nodes[uid]))
+  Object.keys(data.archivedNodes || {}).forEach(uid => updateTargetNode(data.archivedNodes[uid]))
   if (changed) save(data)
 }
 
-// 删除导图文件时，清理内存中属于该导图的复习节点（导图文件夹本身已随删除一并移除）
+// 删除导图文件时，清理内存中属于该导图的复习节点与归档节点（导图文件夹本身已随删除一并移除）
 export const deleteFileForReviews = fileId => {
   if (!fileId) return
   const data = load()
@@ -811,17 +1020,22 @@ export const deleteFileForReviews = fileId => {
     lastSavedSignatures.delete('map:' + targetKey)
   }
   let changed = false
-  Object.keys(data.nodes).forEach(uid => {
-    const n = data.nodes[uid]
-    if (!n) return
-    if (
-      n.fileId === fileId ||
-      (isDirectoryReviewMode() && targetKey && directoryStorage.toMapKey(n.fileId) === targetKey)
-    ) {
-      delete data.nodes[uid]
-      changed = true
-    }
-  })
+  const filterOut = dict => {
+    if (!dict) return
+    Object.keys(dict).forEach(uid => {
+      const n = dict[uid]
+      if (!n) return
+      if (
+        n.fileId === fileId ||
+        (isDirectoryReviewMode() && targetKey && directoryStorage.toMapKey(n.fileId) === targetKey)
+      ) {
+        delete dict[uid]
+        changed = true
+      }
+    })
+  }
+  filterOut(data.nodes)
+  filterOut(data.archivedNodes)
   if (changed) {
     save(data)
   } else if (isDirectoryReviewMode()) {

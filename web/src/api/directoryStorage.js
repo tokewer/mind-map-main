@@ -984,7 +984,17 @@ export const saveMapReviewFile = async (fileName, nodes, options = {}) => {
       if (!folder) return { ok: false, message: '导图文件夹不存在' }
       const fileHandle = await getFile(folder, REVIEW_FILE, true)
       if (!fileHandle) return { ok: false, message: '无法创建复习数据文件' }
-      const safeNodes = toPersistableData(nodes || {}) || {}
+      let safeNodes = {}
+      let safeArchivedNodes = {}
+      if (nodes && typeof nodes === 'object') {
+        if (nodes.nodes && typeof nodes.nodes === 'object') {
+          safeNodes = toPersistableData(nodes.nodes) || {}
+          safeArchivedNodes = toPersistableData(nodes.archivedNodes || {}) || {}
+        } else {
+          safeNodes = toPersistableData(nodes) || {}
+          safeArchivedNodes = toPersistableData(options.archivedNodes || {}) || {}
+        }
+      }
       // 确保每个节点的 fileId / fileName 与所在导图文件夹一致
       Object.keys(safeNodes).forEach(uid => {
         if (safeNodes[uid] && typeof safeNodes[uid] === 'object') {
@@ -992,11 +1002,18 @@ export const saveMapReviewFile = async (fileName, nodes, options = {}) => {
           safeNodes[uid].fileName = key
         }
       })
+      Object.keys(safeArchivedNodes).forEach(uid => {
+        if (safeArchivedNodes[uid] && typeof safeArchivedNodes[uid] === 'object') {
+          safeArchivedNodes[uid].fileId = canonical
+          safeArchivedNodes[uid].fileName = key
+        }
+      })
       const payload = {
-        version: 1,
+        version: 2,
         fileName: key,
         fileId: canonical,
-        nodes: safeNodes
+        nodes: safeNodes,
+        archivedNodes: safeArchivedNodes
       }
       await writeText(fileHandle, JSON.stringify(payload, null, 2))
       return { ok: true, fileName: canonical, key }

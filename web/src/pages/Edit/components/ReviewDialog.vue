@@ -9,7 +9,22 @@
   >
     <!-- 未加入复习：添加表单 -->
     <template v-if="!reviewNode">
-      <el-form label-width="76px" size="small">
+      <el-alert
+        v-if="archivedNode"
+        class="archivedAlert"
+        type="info"
+        :closable="false"
+        show-icon
+      >
+        <div slot="title" class="archivedAlertTitle">
+          检测到历史复习进度：已复习 {{ archivedNode.times }} 次
+          <span v-if="archivedNode.cards && archivedNode.cards.length">，包含 {{ archivedNode.cards.length }} 张卡片</span>
+        </div>
+        <div class="archivedAlertDesc">
+          重新加入将自动保留上次所有复习进度、周期与卡片内容。
+        </div>
+      </el-alert>
+      <el-form label-width="76px" size="small" :style="{ marginTop: archivedNode ? '12px' : '0' }">
         <el-form-item label="节点">
           <span class="nodeName">{{ nodeName }}</span>
           <div class="nodePath" v-if="nodePath">{{ nodePath }}</div>
@@ -63,7 +78,16 @@
     <div slot="footer" class="dialog-footer">
       <template v-if="!reviewNode">
         <el-button size="small" @click="visible = false">取消</el-button>
-        <el-button type="primary" size="small" @click="onAdd">加入复习</el-button>
+        <el-button
+          v-if="archivedNode"
+          size="small"
+          type="warning"
+          plain
+          @click="onAdd(true)"
+        >从头全新开始</el-button>
+        <el-button type="primary" size="small" @click="onAdd(false)">
+          {{ archivedNode ? '恢复并加入复习' : '加入复习' }}
+        </el-button>
       </template>
       <template v-else>
         <el-button size="small" @click="onRemove" type="danger" plain>移除</el-button>
@@ -81,6 +105,7 @@
 <script>
 import {
   getNode,
+  getArchivedNode,
   addReview,
   removeReview,
   completeReview,
@@ -114,6 +139,10 @@ export default {
       // 通过 refreshVersion 建立响应式依赖，避免直接依赖非 Vue 响应式 localStorage。
       this.refreshVersion
       return this.uid ? getNode(this.uid) : null
+    },
+    archivedNode() {
+      this.refreshVersion
+      return this.uid ? getArchivedNode(this.uid) : null
     },
     focusStatus() {
       return !!(this.reviewNode && this.reviewNode.isFocus)
@@ -163,9 +192,14 @@ export default {
       this.fileName = (info && info.fileName) || ''
       this.parentUid = (info && info.parentUid) || ''
       const existing = this.uid ? getNode(this.uid) : null
-      this.cyclesInput = existing
-        ? cyclesToStr(existing.cycles)
-        : cyclesToStr(getDefaultCycles())
+      const archived = this.uid ? getArchivedNode(this.uid) : null
+      if (existing) {
+        this.cyclesInput = cyclesToStr(existing.cycles)
+      } else if (archived && archived.cycles && archived.cycles.length) {
+        this.cyclesInput = cyclesToStr(archived.cycles)
+      } else {
+        this.cyclesInput = cyclesToStr(getDefaultCycles())
+      }
       this.visible = true
     },
     onClosed() {
@@ -175,22 +209,27 @@ export default {
     onReviewDataChange() {
       this.refreshVersion += 1
     },
-    onAdd() {
+    onAdd(resetProgress = false) {
       const cycles = parseCycles(this.cyclesInput)
       if (!cycles.length) {
         this.$message.warning('请填写有效的复习周期，如 1,3,4')
         return
       }
-      addReview({
+      const res = addReview({
         uid: this.uid,
         name: this.nodeName,
         path: this.nodePath,
         fileId: this.fileId,
         fileName: this.fileName,
         parentUid: this.parentUid,
-        cycles
+        cycles,
+        resetProgress
       })
-      this.$message.success('已加入复习（阶段 1：骨架）')
+      if (res && res.restoredFromArchive) {
+        this.$message.success(`已恢复复习计划，保留历史进度（已复习 ${res.times} 次）`)
+      } else {
+        this.$message.success('已加入复习（阶段 1：骨架）')
+      }
       this.visible = false
       this.$bus.$emit('review_data_change')
     },
@@ -230,6 +269,18 @@ export default {
 </script>
 
 <style lang="less" scoped>
+.archivedAlert {
+  margin-bottom: 14px;
+  .archivedAlertTitle {
+    font-weight: 600;
+    color: #409eff;
+  }
+  .archivedAlertDesc {
+    font-size: 12px;
+    margin-top: 4px;
+    color: #606266;
+  }
+}
 .nodeName {
   font-weight: 600;
 }

@@ -739,7 +739,7 @@ export default {
         const identity = this.$store.state.isDirectoryMode
           ? { fileId: this.$store.state.currentSmmFile, fileName: this.$store.state.currentSmmFile }
           : { fileId: '', fileName: '' }
-        addReview({
+        const res = addReview({
           uid: node.uid,
           name: text,
           path,
@@ -747,7 +747,11 @@ export default {
           fileId: identity.fileId,
           fileName: identity.fileName
         })
-        this.$message.success(`已加入复习：${text}`)
+        if (res && res.restoredFromArchive) {
+          this.$message.success(`已重新加入复习并恢复原进度（已复习 ${res.times} 次）：${text}`)
+        } else {
+          this.$message.success(`已加入复习：${text}`)
+        }
       }
       this.$bus.$emit('review_data_change')
     },

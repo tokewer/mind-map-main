@@ -31,6 +31,7 @@
 <script>
 import { mapState } from 'vuex'
 import { getTrashList, removeFromTrash, clearTrash } from '@/review/trash'
+import { transferReviewProgress } from '@/review'
 
 export default {
   name: 'TrashDialog',
@@ -87,12 +88,20 @@ export default {
           }
           const root = mindMap.renderer.root
           if (!root) return
-          // 深拷贝被删节点数据，附上新 uid
+          // 深拷贝被删节点数据，附上新 uid 并继承原复习进度
           const nodeData = JSON.parse(JSON.stringify(item.data))
-          nodeData.data.uid = 'restored_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6)
+          const oldUid = nodeData.data && nodeData.data.uid
+          const newUid = 'restored_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6)
+          nodeData.data.uid = newUid
           nodeData.data.isActive = true
           root.nodeData.children.push(nodeData)
           mindMap.render()
+          if (oldUid) {
+            const transferred = transferReviewProgress(oldUid, newUid)
+            if (transferred) {
+              this.$bus.$emit('review_data_change')
+            }
+          }
           removeFromTrash(item.id)
           this.list = getTrashList()
           this.$message.success('已恢复节点')

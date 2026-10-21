@@ -8,6 +8,7 @@
 // 服务器不可用时（例如直接用 file:// 打开 index.html），自动降级为纯 localStorage，不报错。
 
 import { mergeFileLists } from './storageMerge'
+import { isBrowserStorageEnabled } from './storageConfig'
 
 const API_BASE = '/api'
 
@@ -133,6 +134,35 @@ try {
 const applyDiskKeys = (keys, preferDisk = false) => {
   const diskKeys = Object.keys(keys)
   diskKeySnapshot = new Set(diskKeys)
+  const browserStorageEnabled = isBrowserStorageEnabled()
+
+  // 默认新模式（只读取本地存储，不自动开设浏览器存储）：
+  // 本地磁盘数据具有 100% 绝对权威性，无条件以磁盘数据为准，强制覆盖任何旧浏览器缓存残留！
+  if (!browserStorageEnabled) {
+    // 清理以前遗留的误删 tombstone 标记，防止把磁盘文件误删
+    locallyRemoved.clear()
+    persistTombstones()
+    try {
+      // 清理不在磁盘上的旧受管理键（若有残留）
+      for (let i = localStorage.length - 1; i >= 0; i--) {
+        const k = localStorage.key(i)
+        if (k && isManagedKey(k) && !Object.prototype.hasOwnProperty.call(keys, k)) {
+          localStorage.removeItem(k)
+        }
+      }
+      // 直接以磁盘中的键值为准，加载进当前运行时
+      diskKeys.forEach(key => {
+        if (!isManagedKey(key)) return
+        localStorage.setItem(key, keys[key])
+      })
+    } catch (e) {
+      throw new Error('本地磁盘数据加载失败')
+    }
+    bootstrapKeys.clear()
+    return
+  }
+
+  // 若用户在设置中显式手动开启了浏览器存储：沿用原有的离线合并逻辑
   try {
     if (preferDisk && diskKeys.length) {
       bootstrapKeys.forEach(key => {
@@ -210,14 +240,16 @@ const collectLocalStorage = () => {
 
 // 计算需要从磁盘删除的孤儿键：
 // 1. 本会话显式删除过的键；
-// 2. 磁盘快照里有、但当前 localStorage 里已不存在的受管理键。
+// 2. 磁盘快照里有、但当前 localStorage 里已不存在的受管理键（仅在开启浏览器存储模式下启用；默认纯本地模式下严禁误删）。
 const collectRemovalKeys = keys => {
   const remove = new Set(locallyRemoved)
-  diskKeySnapshot.forEach(key => {
-    if (isManagedKey(key) && localStorage.getItem(key) === null) {
-      remove.add(key)
-    }
-  })
+  if (isBrowserStorageEnabled()) {
+    diskKeySnapshot.forEach(key => {
+      if (isManagedKey(key) && localStorage.getItem(key) === null) {
+        remove.add(key)
+      }
+    })
+  }
   return [...remove].filter(key => {
     return localStorage.getItem(key) === null && !Object.prototype.hasOwnProperty.call(keys, key)
   })

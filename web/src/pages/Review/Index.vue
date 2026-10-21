@@ -567,6 +567,18 @@
               </div>
             </div>
           </div>
+                    <div class="setGroup">
+            <div class="setLabel">存储模式设置</div>
+            <div class="setRow glowEnabledRow">
+              <div>
+                <span>启用浏览器缓存存储（离线镜像）</span>
+                <div class="setTip" style="margin-top: 4px;">
+                  默认关闭：应用启动时只读取本地/服务端存储，不自动开设或填充浏览器缓存，防止旧缓存覆盖本地文件导致数据丢失。如需在无服务环境下使用纯离线浏览器缓存，可手动开启。
+                </div>
+              </div>
+              <el-switch v-model="storageConfig.enableBrowserStorage" @change="onStorageConfigChange"></el-switch>
+            </div>
+          </div>
           <div class="setGroup">
             <div class="setLabel">数据备份</div>
             <div class="setRow">
@@ -854,7 +866,7 @@ import {
   checkShortcutConflict,
   reviewShortcutDispatcher
 } from '@/review/reviewShortcuts'
-import { getFileList, getLocalConfig, readFileData, resumeDirectoryMode } from '@/api'
+import { getFileList, getLocalConfig, readFileData, resumeDirectoryMode, getStorageConfig, setStorageConfig } from '@/api'
 import * as directoryStorage from '@/api/directoryStorage'
 import { buildParentMap, buildReviewGroups, getReviewFileKey, toDirectorySubjectList } from '@/review/tree'
 import {
@@ -916,6 +928,7 @@ export default {
       fileListForAdd: [],
       defaultCyclesStr: '',
       glowConfig: getReviewGlowConfig(),
+      storageConfig: getStorageConfig(),
       // 周期预设（统一来源于 review 数据层，可增删改）
       presetList: [],
       activePresetId: '',
@@ -1246,6 +1259,10 @@ export default {
       this.fTag = ''
       this.filterFile = ''
       this.sortMode = 'urgency'
+    },
+    onStorageConfigChange() {
+      setStorageConfig(this.storageConfig)
+      this.$message.success('存储模式设置已保存')
     },
     onGlowConfigChange() {
       this.glowConfig = normalizeReviewGlowConfig(this.glowConfig)

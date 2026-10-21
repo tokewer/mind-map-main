@@ -5,6 +5,7 @@ import vuexStore from '@/store'
 import { notifyWorkspaceChanged } from './workspaceEvents'
 import { scheduleWorkspaceAutoSave } from './workspace'
 import { syncFromDiskOnce, markBootstrapKey, markKeyRemoved } from './serverStorage'
+import { isBrowserStorageEnabled, getStorageConfig, setStorageConfig } from './storageConfig'
 import * as directoryStorage from './directoryStorage'
 import { getLocalFileHandle, getLocalFileName } from './localFileHandle'
 import { syncReviewFromDirectory, flushReviewWrites } from '@/review'
@@ -59,7 +60,7 @@ export const initFileStorage = () => {
   }
   // 用户已执行「归档并清理浏览器存储」：文件列表为空时不再自动重建占位导图，
   // 避免刚清理完又出现内容的“删不干净”观感。
-  if (list.length === 0 && !isBrowserCleared()) {
+  if (list.length === 0 && !isBrowserCleared() && isBrowserStorageEnabled()) {
     let firstData = simpleDeepClone(exampleData)
     let oldData = localStorage.getItem(SIMPLE_MIND_MAP_DATA)
     if (oldData) {
@@ -112,7 +113,7 @@ export const getCurrentFileId = () => {
     const list = getFileList()
     if (list.length) {
       id = list[0].id
-    } else if (isBrowserCleared()) {
+    } else if (isBrowserCleared() || !isBrowserStorageEnabled()) {
       // 已归档清理且文件列表为空：不写入虚假 current，返回空串由调用方兜底
       return ''
     } else {
@@ -863,3 +864,5 @@ export const getLocalConfig = () => {
   }
   return null
 }
+
+export { getStorageConfig, setStorageConfig, isBrowserStorageEnabled } from './storageConfig'

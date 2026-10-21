@@ -1,6 +1,13 @@
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, test, beforeEach } from 'bun:test'
 import { mergeFileLists } from '../web/src/api/storageMerge.js'
 import { validateWorkspaceStorage } from '../web/src/api/workspaceValidation.js'
+import {
+  getStorageConfig,
+  setStorageConfig,
+  isBrowserStorageEnabled,
+  DEFAULT_STORAGE_CONFIG,
+  STORAGE_CONFIG_KEY
+} from '../web/src/api/storageConfig.js'
 
 const fileData = text => JSON.stringify({
   root: { data: { text }, children: [] },
@@ -82,5 +89,33 @@ describe('validateWorkspaceStorage', () => {
 
     expect(validateWorkspaceStorage(malformed, 'file_a').ok).toBe(false)
     expect(validateWorkspaceStorage(invalidCurrent, 'file_missing').ok).toBe(false)
+  })
+})
+
+describe('storageConfig', () => {
+  beforeEach(() => {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.removeItem(STORAGE_CONFIG_KEY)
+    }
+  })
+
+  test('defaults to enableBrowserStorage = false (pure local storage mode)', () => {
+    const config = getStorageConfig()
+    expect(config.enableBrowserStorage).toBe(false)
+    expect(isBrowserStorageEnabled()).toBe(false)
+  })
+
+  test('allows enabling browser storage explicitly and persists the choice', () => {
+    const updated = setStorageConfig({ enableBrowserStorage: true })
+    expect(updated.enableBrowserStorage).toBe(true)
+    expect(isBrowserStorageEnabled()).toBe(true)
+    expect(getStorageConfig().enableBrowserStorage).toBe(true)
+  })
+
+  test('can revert back to pure local storage mode', () => {
+    setStorageConfig({ enableBrowserStorage: true })
+    expect(isBrowserStorageEnabled()).toBe(true)
+    setStorageConfig({ enableBrowserStorage: false })
+    expect(isBrowserStorageEnabled()).toBe(false)
   })
 })

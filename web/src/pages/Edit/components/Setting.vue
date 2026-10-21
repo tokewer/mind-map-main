@@ -368,6 +368,22 @@
         </div>
       </div>
 
+      <!-- 存储模式设置 -->
+      <div class="title">💾 存储模式设置</div>
+      <div class="row">
+        <div class="rowItem">
+          <el-checkbox
+            v-model="storageConfig.enableBrowserStorage"
+            @change="onStorageConfigChange"
+          >启用浏览器缓存存储（离线镜像）</el-checkbox>
+        </div>
+      </div>
+      <div class="row" style="margin-top: -6px; margin-bottom: 12px;">
+        <span style="font-size: 11px; color: #909399; line-height: 1.4;">
+          默认关闭：优先直接读取本地磁盘存储，不自动开设或将浏览器旧缓存写回本地，避免本地最新文件被旧缓存替换覆盖。
+        </span>
+      </div>
+
       <!-- GitHub 云端自动同步 -->
       <div class="title">☁️ GitHub 云端同步</div>
       <div class="row">
@@ -432,7 +448,7 @@
 
 <script>
 import Sidebar from './Sidebar.vue'
-import { storeConfig } from '@/api'
+import { storeConfig, getStorageConfig, setStorageConfig } from '@/api'
 import {
   getGitHubSyncConfig,
   saveGitHubSyncConfig,
@@ -491,6 +507,7 @@ export default {
         enableDragImport: false,
         enableAi: false
       },
+      storageConfig: getStorageConfig(),
       githubConfig: getGitHubSyncConfig(),
       isSyncingGitHub: false
     }
@@ -640,6 +657,11 @@ export default {
       this.setLocalConfig({
         [key]: value
       })
+    },
+
+    onStorageConfigChange() {
+      setStorageConfig(this.storageConfig)
+      this.$message.success('存储模式设置已保存')
     },
 
     saveGitHubConfig() {
